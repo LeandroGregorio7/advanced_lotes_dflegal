@@ -51,6 +51,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid #c58a28; outline-
 .status-copy { margin: 5px 0 0; color: #edf1e9; font-size: 13px; line-height: 1.25; }
 .tool-cluster { display: grid; gap: 8px; }
 .tool-cluster .section-label { margin-bottom: 2px; color: #a8c7c9; }
+.selection-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid rgb(255 255 255 / .2); background: rgb(4 31 40 / .46); }
+.selection-mode button { min-height: 34px; padding: .45rem .35rem; border: 0; color: rgb(231 240 239 / .72); background: transparent; font: 700 .82rem/1 'Barlow Condensed', sans-serif; letter-spacing: .04em; text-transform: uppercase; transition: background-color 160ms cubic-bezier(.23,1,.32,1), color 160ms cubic-bezier(.23,1,.32,1); }
+.selection-mode button + button { border-left: 1px solid rgb(255 255 255 / .16); }
+.selection-mode button.is-selected { color: #193941; background: #d49a28; }
+.selection-mode button:active { transform: scale(.97); }
+.selection-hint { margin: -0.18rem 0 0.64rem; color: rgb(231 240 239 / .72); font-size: .72rem; line-height: 1.35; }
+.selection-hint strong { color: #f5ca6d; }
 .tool-button { min-height: 59px; justify-content: flex-start; gap: 10px; width: 100%; border-radius: 3px; border: 1px solid transparent; padding: 9px 10px; color: #f8f8f0; background: rgb(250 252 247 / .08); box-shadow: none; transition: background 160ms cubic-bezier(.23,1,.32,1), border 160ms cubic-bezier(.23,1,.32,1), transform 160ms cubic-bezier(.23,1,.32,1); }
 .tool-button:hover:not(:disabled) { transform: translateX(3px); background: rgb(250 252 247 / .14); }
 .tool-button:active:not(:disabled), .print-button:active:not(:disabled) { transform: scale(.98); }

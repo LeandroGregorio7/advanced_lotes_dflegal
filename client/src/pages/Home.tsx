@@ -21,6 +21,7 @@ import {
   AppMapSettings,
   AnalysisRuntime,
   DimensionItem,
+  FeatureKind,
   PublicAreaResult,
   SelectedFeature,
   createAnalysisRuntime,
@@ -61,6 +62,7 @@ const getStoredSettings = (): AppMapSettings => {
 export default function Home() {
   const mapHostRef = useRef<HTMLDivElement | null>(null)
   const runtimeRef = useRef<AnalysisRuntime | null>(null)
+  const selectionModeRef = useRef<FeatureKind>('lote')
   const [settings, setSettings] = useState<AppMapSettings>(getStoredSettings)
   const [isConfigurationOpen, setConfigurationOpen] = useState(true)
   const [isLoadingMap, setLoadingMap] = useState(false)
@@ -68,6 +70,7 @@ export default function Home() {
   const [status, setStatus] = useState('Informe o ID do Web Map para iniciar a análise.')
   const [error, setError] = useState('')
   const [selection, setSelection] = useState<SelectedFeature | null>(null)
+  const [selectionMode, setSelectionMode] = useState<FeatureKind>('lote')
   const [dimensions, setDimensions] = useState<DimensionItem[]>([])
   const [publicArea, setPublicArea] = useState<PublicAreaResult | null>(null)
 
@@ -75,6 +78,14 @@ export default function Home() {
 
   const updateSetting = (key: keyof AppMapSettings, value: string) => {
     setSettings((current) => ({ ...current, [key]: value }))
+  }
+
+  const changeSelectionMode = (mode: FeatureKind) => {
+    selectionModeRef.current = mode
+    setSelectionMode(mode)
+    setSelection(null)
+    setError('')
+    setStatus(`Modo de seleção: ${mode === 'lote' ? 'Lote' : 'Ocupação'}. Clique na feição correspondente no mapa.`)
   }
 
   const loadMap = async () => {
@@ -97,7 +108,7 @@ export default function Home() {
       const runtime = await createAnalysisRuntime(mapHostRef.current, settings, (nextSelection) => {
         setSelection(nextSelection)
         setStatus(`${nextSelection.kind === 'lote' ? 'Lote' : 'Ocupação'} selecionado: ${nextSelection.title}`)
-      })
+      }, () => selectionModeRef.current)
       runtimeRef.current = runtime
       window.localStorage.setItem(storageKey, JSON.stringify(settings))
       setConfigurationOpen(false)
@@ -187,10 +198,10 @@ export default function Home() {
   return (
     <main className="analysis-workspace">
       <aside className="command-rail">
-        <div className="rail-texture" style={{ backgroundImage: 'url(/assets/cartographic-workbench-wide.jpg)' }} />
+        <div className="rail-texture" style={{ backgroundImage: 'url(/manus-storage/cartographic-workbench-wide_55f61441.jpg)' }} />
         <div className="rail-content">
           <header className="brand-lockup">
-            <img src="/assets/advanced-lotes-logo.png" alt="Símbolo Advanced Lotes DF Legal" className="brand-mark" />
+            <img src="/manus-storage/advanced-lotes-logo_1aed79e5.png" alt="Símbolo Advanced Lotes DF Legal" className="brand-mark" />
             <div>
               <p className="eyebrow">DF LEGAL · ANÁLISE ESPACIAL</p>
               <h1>Advanced<br />Lotes</h1>
@@ -207,6 +218,15 @@ export default function Home() {
 
           <section className="tool-cluster" aria-label="Ferramentas de análise">
             <p className="section-label">ANÁLISE DO LOTE</p>
+            <div className="selection-mode" role="group" aria-label="Camada a selecionar no mapa">
+              <button type="button" className={selectionMode === 'lote' ? 'is-selected' : ''} onClick={() => changeSelectionMode('lote')}>
+                Selecionar lote
+              </button>
+              <button type="button" className={selectionMode === 'ocupacao' ? 'is-selected' : ''} onClick={() => changeSelectionMode('ocupacao')}>
+                Selecionar ocupação
+              </button>
+            </div>
+            <p className="selection-hint">Modo ativo: <strong>{selectionMode === 'lote' ? 'Lote' : 'Ocupação'}</strong>. Clique somente na camada escolhida.</p>
             <Button onClick={drawDimensions} disabled={!mapIsLoaded || !selectionIsLot} className="tool-button tool-button-dimension">
               <Ruler size={18} strokeWidth={1.8} />
               <span><strong>Cotar segmentos</strong><small>Desenha cada medida do lote</small></span>
@@ -247,7 +267,7 @@ export default function Home() {
 
         {!mapIsLoaded && (
           <div className="map-empty-state">
-            <img src="/assets/cadastral-detail-reference.jpg" alt="Referência abstrata de loteamento cadastral" />
+            <img src="/manus-storage/cadastral-detail-reference_52d4cd42.jpg" alt="Referência abstrata de loteamento cadastral" />
             <div className="map-empty-overlay" />
             <div className="empty-copy">
               <span className="eyebrow">ESTADO 01 · MAPA NÃO CONECTADO</span>
@@ -273,7 +293,7 @@ export default function Home() {
 
         {(dimensions.length > 0 || publicArea) && (
           <aside className="analysis-panel">
-            <div className="analysis-panel-texture" style={{ backgroundImage: 'url(/assets/parcel-analysis-texture.jpg)' }} />
+            <div className="analysis-panel-texture" style={{ backgroundImage: 'url(/manus-storage/parcel-analysis-texture_08b98a22.jpg)' }} />
             <div className="analysis-panel-content">
               <div className="analysis-panel-title"><span>RESULTADO DA ANÁLISE</span><div /></div>
               {dimensions.length > 0 && (

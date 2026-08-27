@@ -252,6 +252,7 @@ export async function createAnalysisRuntime(
   container: HTMLDivElement,
   settings: AppMapSettings,
   onSelection: (selection: SelectedFeature) => void,
+  getSelectionMode: () => FeatureKind,
 ): Promise<AnalysisRuntime> {
   const portal = new Portal({ url: settings.portalUrl.replace(/\/$/, '') })
   const webmap = new WebMap({ portalItem: { id: settings.webMapId.trim(), portal } })
@@ -277,15 +278,16 @@ export async function createAnalysisRuntime(
   }
 
   const clickHandle = view.on('click', async (event) => {
-    const response = await view.hitTest(event, { include: [lotLayer, occupationLayer] })
+    const kind = getSelectionMode()
+    const targetLayer = kind === 'lote' ? lotLayer : occupationLayer
+    const response = await view.hitTest(event, { include: [targetLayer] })
     const hit = response.results.find((result) => {
       if (result.type !== 'graphic') return false
-      return result.graphic.layer === lotLayer || result.graphic.layer === occupationLayer
+      return result.graphic.layer === targetLayer
     })
     if (!hit || hit.type !== 'graphic') return
 
-    const kind: FeatureKind = hit.graphic.layer === lotLayer ? 'lote' : 'ocupacao'
-    onSelection(makeSelection(kind, hit.graphic, kind === 'lote' ? lotLayer : occupationLayer, settings))
+    onSelection(makeSelection(kind, hit.graphic, targetLayer, settings))
   })
 
   return {
