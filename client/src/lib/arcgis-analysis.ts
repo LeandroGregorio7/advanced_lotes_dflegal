@@ -277,6 +277,10 @@ export async function createAnalysisRuntime(
     throw new Error(`Não encontrei uma das camadas configuradas. Camadas disponíveis: ${available || 'nenhuma'}.`)
   }
 
+  // O Web Map operacional mantém esta camada desligada. A visualização é ativada
+  // apenas nesta sessão para a análise, sem salvar nem modificar o item do Portal.
+  occupationLayer.visible = true
+
   const clickHandle = view.on('click', async (event) => {
     const kind = getSelectionMode()
     const targetLayer = kind === 'lote' ? lotLayer : occupationLayer
