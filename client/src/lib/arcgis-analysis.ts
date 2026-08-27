@@ -107,6 +107,18 @@ const normalizeAngle = (angle: number) => {
   return normalized
 }
 
+const sameVertex = (first: number[], second: number[]) =>
+  Math.abs(first[0] - second[0]) < 0.000001 && Math.abs(first[1] - second[1]) < 0.000001
+
+const normalizedRing = (ring: number[][]) => {
+  const vertices: number[][] = []
+  for (const vertex of ring) {
+    if (!vertices.length || !sameVertex(vertices[vertices.length - 1], vertex)) vertices.push(vertex)
+  }
+  while (vertices.length > 1 && sameVertex(vertices[0], vertices[vertices.length - 1])) vertices.pop()
+  return vertices
+}
+
 const makeSelection = (kind: FeatureKind, graphic: Graphic, layer: FeatureLayer, settings: AppMapSettings): SelectedFeature => ({
   kind,
   graphic,
@@ -124,49 +136,80 @@ const ensurePolygon = (graphic: Graphic, layerLabel: string) => {
 const findFeatureLayer = (webmap: WebMap, title: string) =>
   webmap.allLayers.find((layer) => layer.type === 'feature' && layer.title === title) as FeatureLayer | undefined
 
-const buildDimensionGraphics = (polygon: Polygon) => {
+const buildDimensionGraphics = (polygon: Polygon, viewResolution: number) => {
   const outerRing = polygon.rings[0]
   if (!outerRing || outerRing.length < 3) throw new Error('O lote selecionado não possui vértices suficientes para cotagem.')
 
-  const isClosed = outerRing[0][0] === outerRing[outerRing.length - 1][0] && outerRing[0][1] === outerRing[outerRing.length - 1][1]
-  const vertexCount = isClosed ? outerRing.length - 1 : outerRing.length
+  const vertices = normalizedRing(outerRing)
+  if (vertices.length < 3) throw new Error('O lote selecionado não possui segmentos válidos para cotagem.')
+
+  const centroid = polygon.centroid
+  const offsetDistance = Math.max(2, viewResolution * 24)
   const graphics: Graphic[] = []
   const dimensions: DimensionItem[] = []
 
-  for (let index = 0; index < vertexCount; index += 1) {
-    const start = outerRing[index]
-    const end = outerRing[(index + 1) % vertexCount]
+  for (let index = 0; index < vertices.length; index += 1) {
+    const start = vertices[index]
+    const end = vertices[(index + 1) % vertices.length]
     const segment = new Polyline({
       spatialReference: polygon.spatialReference,
       paths: [[start, end]],
     })
     const length = geometryEngine.geodesicLength(segment, 'meters') || 0
+    if (length < 0.01) continue
+
     const label = `L${String(index + 1).padStart(2, '0')}`
     const text = `${length.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
     const dx = end[0] - start[0]
     const dy = end[1] - start[1]
+    const planarLength = Math.hypot(dx, dy)
+    if (!planarLength) continue
     const angle = normalizeAngle((Math.atan2(dy, dx) * 180) / Math.PI)
     const midpoint = new Point({
       x: (start[0] + end[0]) / 2,
       y: (start[1] + end[1]) / 2,
       spatialReference: polygon.spatialReference,
     })
+    let normalX = -dy / planarLength
+    let normalY = dx / planarLength
+    if (centroid && (midpoint.x - centroid.x) * normalX + (midpoint.y - centroid.y) * normalY < 0) {
+      normalX *= -1
+      normalY *= -1
+    }
+    const offsetStart = [start[0] + normalX * offsetDistance, start[1] + normalY * offsetDistance]
+    const offsetEnd = [end[0] + normalX * offsetDistance, end[1] + normalY * offsetDistance]
+    const labelPoint = new Point({
+      x: midpoint.x + normalX * offsetDistance,
+      y: midpoint.y + normalY * offsetDistance,
+      spatialReference: polygon.spatialReference,
+    })
+    const dimensionLine = new Polyline({ spatialReference: polygon.spatialReference, paths: [[offsetStart, offsetEnd]] })
+    const extensionStart = new Polyline({ spatialReference: polygon.spatialReference, paths: [[start, offsetStart]] })
+    const extensionEnd = new Polyline({ spatialReference: polygon.spatialReference, paths: [[end, offsetEnd]] })
 
     graphics.push(
       new Graphic({
-        geometry: segment,
-        symbol: new SimpleLineSymbol({ color: dimensionColor, width: 2.5, style: 'short-dot' }),
+        geometry: dimensionLine,
+        symbol: new SimpleLineSymbol({ color: dimensionColor, width: 2.1, style: 'solid' }),
         attributes: { analysisType: 'dimension-line', segment: label, lengthMeters: length },
       }),
       new Graphic({
-        geometry: midpoint,
+        geometry: extensionStart,
+        symbol: new SimpleLineSymbol({ color: dimensionColor, width: 1.2, style: 'short-dot' }),
+      }),
+      new Graphic({
+        geometry: extensionEnd,
+        symbol: new SimpleLineSymbol({ color: dimensionColor, width: 1.2, style: 'short-dot' }),
+      }),
+      new Graphic({
+        geometry: labelPoint,
         symbol: new TextSymbol({
           text,
           color: '#725016',
           haloColor: '#FFFDF6',
-          haloSize: 1.8,
+          haloSize: 2.2,
           angle,
-          yoffset: 8,
+          yoffset: 0,
           font: { family: 'Source Sans 3', size: 11, weight: 'bold' },
         }),
         attributes: { analysisType: 'dimension-label', segment: label, lengthMeters: length },
@@ -251,7 +294,7 @@ export async function createAnalysisRuntime(
     drawDimensions: (lote) => {
       const polygon = ensurePolygon(lote.graphic, 'O lote selecionado')
       dimensionLayer.removeAll()
-      const { graphics, dimensions } = buildDimensionGraphics(polygon)
+      const { graphics, dimensions } = buildDimensionGraphics(polygon, view.resolution)
       dimensionLayer.addMany(graphics)
       return dimensions
     },
