@@ -60,6 +60,8 @@ export interface AnalysisRuntime {
   view: MapView
   layerTitles: string[]
   setSelectionMode: (mode: FeatureKind) => void
+  searchFeatures: (mode: FeatureKind, searchText: string) => Promise<SelectedFeature[]>
+  selectFeature: (selection: SelectedFeature, zoomToFeature?: boolean) => Promise<void>
   drawDimensions: (lote: SelectedFeature) => DimensionItem[]
   analysePublicArea: (ocupacao: SelectedFeature) => Promise<PublicAreaResult>
   clearGraphics: () => void
@@ -270,7 +272,8 @@ export async function createAnalysisRuntime(
 
   const hatchLayer = new GraphicsLayer({ title: 'Análise temporária — área pública', listMode: 'hide' })
   const dimensionLayer = new GraphicsLayer({ title: 'Análise temporária — cotas', listMode: 'hide' })
-  webmap.addMany([hatchLayer, dimensionLayer])
+  const selectionLayer = new GraphicsLayer({ title: 'Análise temporária — seleção', listMode: 'hide' })
+  webmap.addMany([hatchLayer, dimensionLayer, selectionLayer])
 
   const lotLayer = findFeatureLayer(webmap, settings.lotLayerTitle)
   const occupationLayer = findFeatureLayer(webmap, settings.occupationLayerTitle)
@@ -282,7 +285,47 @@ export async function createAnalysisRuntime(
   // O Web Map operacional mantém esta camada desligada. Ela é exibida somente
   // durante a escolha de ocupação, sem salvar nem modificar o item do Portal.
   occupationLayer.visible = getSelectionMode() === 'ocupacao'
-  occupationLayer.opacity = 0.28
+  occupationLayer.opacity = 0.18
+  lotLayer.opacity = 0.76
+
+  const selectFeature = async (selected: SelectedFeature, zoomToFeature = false) => {
+    selectionLayer.graphics
+      .toArray()
+      .filter((graphic) => graphic.attributes?.selectedKind === selected.kind)
+      .forEach((graphic) => selectionLayer.remove(graphic))
+    const geometry = selected.graphic.geometry
+    if (geometry?.type === 'polygon') {
+      const color = selected.kind === 'lote' ? [0, 224, 255, 0.16] : [255, 79, 126, 0.16]
+      const outline = selected.kind === 'lote' ? '#00DDF5' : '#FF4779'
+      selectionLayer.add(new Graphic({
+        geometry,
+        symbol: new SimpleFillSymbol({
+          style: 'solid',
+          color,
+          outline: new SimpleLineSymbol({ color: outline, width: 4 }),
+        }),
+        attributes: { analysisType: 'selected-feature', selectedKind: selected.kind },
+      }))
+    }
+    onSelection(selected)
+    if (zoomToFeature && geometry) await view.goTo(geometry, { duration: 550 })
+  }
+
+  const searchFeatures = async (kind: FeatureKind, searchText: string) => {
+    const value = searchText.trim().replace(/'/g, "''")
+    if (value.length < 2) return []
+    const layer = kind === 'lote' ? lotLayer : occupationLayer
+    const fields = kind === 'lote'
+      ? ['pu_ciu', 'pu_end_car', 'pu_end_usu']
+      : ['ct_ciu', 'lt_enderec', 'lt_nome']
+    const query = layer.createQuery()
+    query.where = fields.map((field) => `UPPER(${field}) LIKE UPPER('%${value}%')`).join(' OR ')
+    query.outFields = ['*']
+    query.returnGeometry = true
+    query.num = 8
+    const response = await layer.queryFeatures(query)
+    return response.features.map((graphic) => makeSelection(kind, graphic, layer, settings))
+  }
 
   const clickHandle = view.on('click', async (event) => {
     const kind = getSelectionMode()
@@ -297,7 +340,7 @@ export async function createAnalysisRuntime(
     const graphic = response.features[0]
     if (!graphic) return
 
-    onSelection(makeSelection(kind, graphic, targetLayer, settings))
+    await selectFeature(makeSelection(kind, graphic, targetLayer, settings))
   })
 
   return {
@@ -306,6 +349,8 @@ export async function createAnalysisRuntime(
     setSelectionMode: (mode) => {
       occupationLayer.visible = mode === 'ocupacao'
     },
+    searchFeatures,
+    selectFeature,
     drawDimensions: (lote) => {
       const polygon = ensurePolygon(lote.graphic, 'O lote selecionado')
       dimensionLayer.removeAll()
@@ -374,10 +419,10 @@ export async function createAnalysisRuntime(
       dimensionLayer.removeAll()
     },
     printAnalysis: async (printSettings, title, analysisText, selectionText) => {
-      const normalizedLayout = printSettings.layoutName.trim().toLowerCase().replace(/_/g, '-')
+      const layout = printSettings.layoutName.trim() || 'MAP_ONLY'
       const template = new PrintTemplate({
         format: 'pdf',
-        layout: (normalizedLayout || 'map-only') as any,
+        layout: layout as any,
         layoutOptions: {
           titleText: title,
           customTextElements: [
@@ -388,8 +433,9 @@ export async function createAnalysisRuntime(
         exportOptions: { dpi: 180 },
       })
       const parameters = new PrintParameters({ view, template })
+      const executionMode = await print.getMode(printSettings.printServiceUrl)
       const response = await print.execute(printSettings.printServiceUrl, parameters)
-      if (!response.url) throw new Error('O serviço de impressão terminou sem retornar a URL do PDF.')
+      if (!response.url) throw new Error(`O serviço de impressão não retornou a URL do PDF. Modo: ${executionMode}; layout enviado: ${layout}.`)
       return response.url
     },
     destroy: () => {

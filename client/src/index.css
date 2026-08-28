@@ -1,6 +1,6 @@
 /* Carta Técnica Operacional: grafite azulado, papel mineral, Azul Carta #0E556B; ocre para cotas e vermelho somente para alerta. */
-@import '@arcgis/core/assets/esri/themes/light/main.css';
 @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,500;0,600;0,700;1,600&family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+@import '@arcgis/core/assets/esri/themes/light/main.css';
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
@@ -58,6 +58,17 @@ button:focus-visible, input:focus-visible { outline: 2px solid #c58a28; outline-
 .selection-mode button:active { transform: scale(.97); }
 .selection-hint { margin: -0.18rem 0 0.64rem; color: rgb(231 240 239 / .72); font-size: .72rem; line-height: 1.35; }
 .selection-hint strong { color: #f5ca6d; }
+.feature-search { margin: -.1rem 0 .3rem; }
+.feature-search-entry { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 35px; padding-left: 8px; border: 1px solid rgb(222 237 229 / .32); background: rgb(1 25 33 / .48); color: #e3b45e; }
+.feature-search-entry input { min-width: 0; height: 33px; border: 0; padding: 0; color: #f7f8ee; background: transparent; font-size: 12px; outline: 0; }
+.feature-search-entry input::placeholder { color: rgb(222 237 229 / .58); }
+.feature-search-entry button { align-self: stretch; border: 0; padding: 0 10px; color: #173c45; background: #e4b859; font: 700 11px/1 'Barlow Condensed', sans-serif; letter-spacing: .06em; text-transform: uppercase; }
+.feature-search-entry button:disabled { opacity: .56; cursor: not-allowed; }
+.feature-search-results { max-height: 150px; overflow-y: auto; border: 1px solid rgb(222 237 229 / .25); border-top: 0; background: #0d303a; }
+.feature-search-results button { display: grid; gap: 2px; width: 100%; padding: 8px 9px; border: 0; border-bottom: 1px solid rgb(222 237 229 / .16); color: #f6f7ed; background: transparent; text-align: left; }
+.feature-search-results button:hover { background: rgb(228 184 89 / .16); }
+.feature-search-results strong { font: 600 13px/1 'Barlow Condensed', sans-serif; letter-spacing: .03em; }
+.feature-search-results small { color: #bed1cd; font-size: 10px; }
 .tool-button { min-height: 59px; justify-content: flex-start; gap: 10px; width: 100%; border-radius: 3px; border: 1px solid transparent; padding: 9px 10px; color: #f8f8f0; background: rgb(250 252 247 / .08); box-shadow: none; transition: background 160ms cubic-bezier(.23,1,.32,1), border 160ms cubic-bezier(.23,1,.32,1), transform 160ms cubic-bezier(.23,1,.32,1); }
 .tool-button:hover:not(:disabled) { transform: translateX(3px); background: rgb(250 252 247 / .14); }
 .tool-button:active:not(:disabled), .print-button:active:not(:disabled) { transform: scale(.98); }

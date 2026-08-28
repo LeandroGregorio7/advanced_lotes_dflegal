@@ -12,6 +12,7 @@ import {
   LoaderCircle,
   MapPinned,
   Ruler,
+  Search,
   Settings2,
   Trash2,
 } from 'lucide-react'
@@ -73,6 +74,9 @@ export default function Home() {
   const [lotSelection, setLotSelection] = useState<SelectedFeature | null>(null)
   const [occupationSelection, setOccupationSelection] = useState<SelectedFeature | null>(null)
   const [selectionMode, setSelectionMode] = useState<FeatureKind>('lote')
+  const [searchText, setSearchText] = useState('')
+  const [searchResults, setSearchResults] = useState<SelectedFeature[]>([])
+  const [isSearching, setSearching] = useState(false)
   const [dimensions, setDimensions] = useState<DimensionItem[]>([])
   const [publicArea, setPublicArea] = useState<PublicAreaResult | null>(null)
 
@@ -86,6 +90,8 @@ export default function Home() {
     selectionModeRef.current = mode
     setSelectionMode(mode)
     runtimeRef.current?.setSelectionMode(mode)
+    setSearchText('')
+    setSearchResults([])
     setError('')
     setStatus(`Modo de seleção: ${mode === 'lote' ? 'Lote' : 'Ocupação'}. Clique na feição correspondente; seleções anteriores são mantidas.`)
   }
@@ -126,6 +132,38 @@ export default function Home() {
       setStatus('O mapa não foi carregado.')
     } finally {
       setLoadingMap(false)
+    }
+  }
+
+  const searchSelectedLayer = async () => {
+    if (!runtimeRef.current) return
+    if (searchText.trim().length < 2) {
+      setError('Informe pelo menos dois caracteres do CIU ou do endereço.')
+      return
+    }
+    try {
+      setSearching(true)
+      setError('')
+      setStatus(`Buscando ${selectionMode === 'lote' ? 'lote' : 'ocupação'} por CIU ou endereço…`)
+      const results = await runtimeRef.current.searchFeatures(selectionMode, searchText)
+      setSearchResults(results)
+      setStatus(results.length ? `${results.length} resultado(s) encontrado(s). Escolha um para selecionar.` : 'Nenhum resultado encontrado para a busca.')
+    } catch (searchError) {
+      setError(searchError instanceof Error ? searchError.message : 'Não foi possível pesquisar a camada selecionada.')
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  const selectSearchResult = async (result: SelectedFeature) => {
+    if (!runtimeRef.current) return
+    try {
+      setError('')
+      await runtimeRef.current.selectFeature(result, true)
+      setSearchResults([])
+      setStatus(`${result.kind === 'lote' ? 'Lote' : 'Ocupação'} selecionado pela busca: ${result.title}`)
+    } catch (selectionError) {
+      setError(selectionError instanceof Error ? selectionError.message : 'Não foi possível selecionar o resultado encontrado.')
     }
   }
 
@@ -235,6 +273,31 @@ export default function Home() {
               </button>
             </div>
             <p className="selection-hint">Modo ativo: <strong>{selectionMode === 'lote' ? 'Lote' : 'Ocupação'}</strong>. As duas seleções permanecem ativas para a análise.</p>
+            <div className="feature-search">
+              <div className="feature-search-entry">
+                <Search size={15} aria-hidden="true" />
+                <Input
+                  aria-label="Buscar por CIU ou endereço"
+                  value={searchText}
+                  placeholder="CIU ou endereço"
+                  onChange={(event) => setSearchText(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter') void searchSelectedLayer() }}
+                />
+                <button type="button" onClick={() => void searchSelectedLayer()} disabled={!mapIsLoaded || isSearching}>
+                  {isSearching ? '…' : 'Buscar'}
+                </button>
+              </div>
+              {searchResults.length > 0 && (
+                <div className="feature-search-results" aria-label="Resultados da busca">
+                  {searchResults.map((result) => (
+                    <button type="button" key={`${result.kind}-${result.title}`} onClick={() => void selectSearchResult(result)}>
+                      <strong>{result.title}</strong>
+                      <small>Área: {formatSquareMeters(result.reportedArea)}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <Button onClick={drawDimensions} disabled={!mapIsLoaded || !selectionIsLot} className="tool-button tool-button-dimension">
               <Ruler size={18} strokeWidth={1.8} />
               <span><strong>Cotar segmentos</strong><small>Desenha cada medida do lote</small></span>
