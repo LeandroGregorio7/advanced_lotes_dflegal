@@ -70,6 +70,8 @@ export default function Home() {
   const [status, setStatus] = useState('Informe o ID do Web Map para iniciar a análise.')
   const [error, setError] = useState('')
   const [selection, setSelection] = useState<SelectedFeature | null>(null)
+  const [lotSelection, setLotSelection] = useState<SelectedFeature | null>(null)
+  const [occupationSelection, setOccupationSelection] = useState<SelectedFeature | null>(null)
   const [selectionMode, setSelectionMode] = useState<FeatureKind>('lote')
   const [dimensions, setDimensions] = useState<DimensionItem[]>([])
   const [publicArea, setPublicArea] = useState<PublicAreaResult | null>(null)
@@ -83,9 +85,8 @@ export default function Home() {
   const changeSelectionMode = (mode: FeatureKind) => {
     selectionModeRef.current = mode
     setSelectionMode(mode)
-    setSelection(null)
     setError('')
-    setStatus(`Modo de seleção: ${mode === 'lote' ? 'Lote' : 'Ocupação'}. Clique na feição correspondente no mapa.`)
+    setStatus(`Modo de seleção: ${mode === 'lote' ? 'Lote' : 'Ocupação'}. Clique na feição correspondente; seleções anteriores são mantidas.`)
   }
 
   const loadMap = async () => {
@@ -99,6 +100,8 @@ export default function Home() {
     setError('')
     setStatus('Conectando ao Portal e carregando as camadas protegidas…')
     setSelection(null)
+    setLotSelection(null)
+    setOccupationSelection(null)
     setDimensions([])
     setPublicArea(null)
     runtimeRef.current?.destroy()
@@ -107,6 +110,8 @@ export default function Home() {
     try {
       const runtime = await createAnalysisRuntime(mapHostRef.current, settings, (nextSelection) => {
         setSelection(nextSelection)
+        if (nextSelection.kind === 'lote') setLotSelection(nextSelection)
+        else setOccupationSelection(nextSelection)
         setStatus(`${nextSelection.kind === 'lote' ? 'Lote' : 'Ocupação'} selecionado: ${nextSelection.title}`)
       }, () => selectionModeRef.current)
       runtimeRef.current = runtime
@@ -124,13 +129,13 @@ export default function Home() {
 
   const drawDimensions = () => {
     if (!runtimeRef.current) return
-    if (!selection || selection.kind !== 'lote') {
+    if (!lotSelection) {
       setError('Selecione primeiro um lote da camada “Lotes Registrados”.')
       return
     }
     try {
       setError('')
-      const nextDimensions = runtimeRef.current.drawDimensions(selection)
+      const nextDimensions = runtimeRef.current.drawDimensions(lotSelection)
       setDimensions(nextDimensions)
       setStatus(`${nextDimensions.length} segmentos cotados no lote selecionado.`)
     } catch (dimensionError) {
@@ -140,14 +145,14 @@ export default function Home() {
 
   const analysePublicArea = async () => {
     if (!runtimeRef.current) return
-    if (!selection || selection.kind !== 'ocupacao') {
+    if (!occupationSelection) {
       setError('Selecione primeiro uma ocupação da camada “Ocupacoes Identificadas”.')
       return
     }
     try {
       setError('')
       setStatus('Calculando a diferença geométrica entre ocupação e lote…')
-      const result = await runtimeRef.current.analysePublicArea(selection)
+      const result = await runtimeRef.current.analysePublicArea(occupationSelection)
       setPublicArea(result)
       setStatus(result.hasPublicArea ? 'Área pública ocupada destacada no mapa.' : 'Análise concluída sem área pública hachurada.')
     } catch (analysisError) {
@@ -177,9 +182,10 @@ export default function Home() {
             `Área geométrica hachurada: ${formatSquareMeters(publicArea.geometricPublicArea)}`,
           ].join('\n')
         : 'Nenhuma análise de área pública executada.'
-      const selectionText = selection
-        ? `${selection.kind === 'lote' ? 'Lote' : 'Ocupação'}: ${selection.title}\nÁrea informada: ${formatSquareMeters(selection.reportedArea)}`
-        : 'Nenhuma feição selecionada.'
+      const selectionText = [
+        lotSelection ? `Lote: ${lotSelection.title}\nÁrea informada: ${formatSquareMeters(lotSelection.reportedArea)}` : 'Lote: não selecionado.',
+        occupationSelection ? `Ocupação: ${occupationSelection.title}\nÁrea informada: ${formatSquareMeters(occupationSelection.reportedArea)}` : 'Ocupação: não selecionada.',
+      ].join('\n\n')
       const fileUrl = await runtimeRef.current.printAnalysis(settings, 'Análise de Lote — DF Legal', analysisText, selectionText)
       window.open(fileUrl, '_blank', 'noopener,noreferrer')
       setStatus('PDF gerado. A nova aba contém o arquivo devolvido pelo serviço.')
@@ -192,8 +198,8 @@ export default function Home() {
   }
 
   const mapIsLoaded = Boolean(runtimeRef.current)
-  const selectionIsLot = selection?.kind === 'lote'
-  const selectionIsOccupation = selection?.kind === 'ocupacao'
+  const selectionIsLot = Boolean(lotSelection)
+  const selectionIsOccupation = Boolean(occupationSelection)
 
   return (
     <main className="analysis-workspace">
@@ -226,7 +232,7 @@ export default function Home() {
                 Selecionar ocupação
               </button>
             </div>
-            <p className="selection-hint">Modo ativo: <strong>{selectionMode === 'lote' ? 'Lote' : 'Ocupação'}</strong>. Clique somente na camada escolhida.</p>
+            <p className="selection-hint">Modo ativo: <strong>{selectionMode === 'lote' ? 'Lote' : 'Ocupação'}</strong>. As duas seleções permanecem ativas para a análise.</p>
             <Button onClick={drawDimensions} disabled={!mapIsLoaded || !selectionIsLot} className="tool-button tool-button-dimension">
               <Ruler size={18} strokeWidth={1.8} />
               <span><strong>Cotar segmentos</strong><small>Desenha cada medida do lote</small></span>

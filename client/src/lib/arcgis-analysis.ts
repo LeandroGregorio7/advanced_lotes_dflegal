@@ -281,6 +281,7 @@ export async function createAnalysisRuntime(
   // O Web Map operacional mantém esta camada desligada. A visualização é ativada
   // apenas nesta sessão para a análise, sem salvar nem modificar o item do Portal.
   occupationLayer.visible = true
+  occupationLayer.opacity = 0.28
 
   const clickHandle = view.on('click', async (event) => {
     const kind = getSelectionMode()
@@ -322,13 +323,25 @@ export async function createAnalysisRuntime(
 
       hatchLayer.removeAll()
       if (hasPublicArea && hachGeometry) {
-        hatchLayer.add(
+        hatchLayer.addMany([
           new Graphic({
             geometry: hachGeometry,
             symbol: new SimpleFillSymbol({
-              style: 'forward-diagonal',
-              color: [185, 56, 53, 0.22],
-              outline: new SimpleLineSymbol({ color: alertColor, width: 2.2 }),
+              style: 'none',
+              outline: new SimpleLineSymbol({ color: '#1C2525', width: 4.2 }),
+            }),
+            attributes: {
+              analysisType: 'public-area-outline',
+              reportedExcess: numericalExcess,
+              geometricArea: geometricPublicArea,
+            },
+          }),
+          new Graphic({
+            geometry: hachGeometry,
+            symbol: new SimpleFillSymbol({
+              style: 'cross',
+              color: [255, 226, 79, 0.92],
+              outline: new SimpleLineSymbol({ color: '#FFE46E', width: 2.1 }),
             }),
             attributes: {
               analysisType: 'public-area',
@@ -336,7 +349,7 @@ export async function createAnalysisRuntime(
               geometricArea: geometricPublicArea,
             },
           }),
-        )
+        ])
       }
 
       return {
