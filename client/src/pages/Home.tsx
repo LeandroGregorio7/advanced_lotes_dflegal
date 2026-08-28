@@ -85,6 +85,7 @@ export default function Home() {
   const changeSelectionMode = (mode: FeatureKind) => {
     selectionModeRef.current = mode
     setSelectionMode(mode)
+    runtimeRef.current?.setSelectionMode(mode)
     setError('')
     setStatus(`Modo de seleção: ${mode === 'lote' ? 'Lote' : 'Ocupação'}. Clique na feição correspondente; seleções anteriores são mantidas.`)
   }
@@ -115,6 +116,7 @@ export default function Home() {
         setStatus(`${nextSelection.kind === 'lote' ? 'Lote' : 'Ocupação'} selecionado: ${nextSelection.title}`)
       }, () => selectionModeRef.current)
       runtimeRef.current = runtime
+      runtime.setSelectionMode(selectionModeRef.current)
       window.localStorage.setItem(storageKey, JSON.stringify(settings))
       setConfigurationOpen(false)
       setStatus(`Mapa carregado. Clique em um lote ou em uma ocupação para iniciar.`)

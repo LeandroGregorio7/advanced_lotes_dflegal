@@ -59,6 +59,7 @@ export interface PublicAreaResult {
 export interface AnalysisRuntime {
   view: MapView
   layerTitles: string[]
+  setSelectionMode: (mode: FeatureKind) => void
   drawDimensions: (lote: SelectedFeature) => DimensionItem[]
   analysePublicArea: (ocupacao: SelectedFeature) => Promise<PublicAreaResult>
   clearGraphics: () => void
@@ -278,9 +279,9 @@ export async function createAnalysisRuntime(
     throw new Error(`Não encontrei uma das camadas configuradas. Camadas disponíveis: ${available || 'nenhuma'}.`)
   }
 
-  // O Web Map operacional mantém esta camada desligada. A visualização é ativada
-  // apenas nesta sessão para a análise, sem salvar nem modificar o item do Portal.
-  occupationLayer.visible = true
+  // O Web Map operacional mantém esta camada desligada. Ela é exibida somente
+  // durante a escolha de ocupação, sem salvar nem modificar o item do Portal.
+  occupationLayer.visible = getSelectionMode() === 'ocupacao'
   occupationLayer.opacity = 0.28
 
   const clickHandle = view.on('click', async (event) => {
@@ -302,6 +303,9 @@ export async function createAnalysisRuntime(
   return {
     view,
     layerTitles: webmap.allLayers.toArray().map((layer) => layer.title || '').filter(Boolean),
+    setSelectionMode: (mode) => {
+      occupationLayer.visible = mode === 'ocupacao'
+    },
     drawDimensions: (lote) => {
       const polygon = ensurePolygon(lote.graphic, 'O lote selecionado')
       dimensionLayer.removeAll()
