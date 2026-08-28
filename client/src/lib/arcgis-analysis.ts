@@ -262,6 +262,7 @@ export async function createAnalysisRuntime(
     container,
     map: webmap,
     constraints: { snapToZoom: false },
+    popupEnabled: false,
     ui: { components: ['zoom', 'compass', 'attribution'] },
   })
   await view.when()
@@ -284,14 +285,17 @@ export async function createAnalysisRuntime(
   const clickHandle = view.on('click', async (event) => {
     const kind = getSelectionMode()
     const targetLayer = kind === 'lote' ? lotLayer : occupationLayer
-    const response = await view.hitTest(event, { include: [targetLayer] })
-    const hit = response.results.find((result) => {
-      if (result.type !== 'graphic') return false
-      return result.graphic.layer === targetLayer
-    })
-    if (!hit || hit.type !== 'graphic') return
+    const query = targetLayer.createQuery()
+    query.geometry = event.mapPoint
+    query.spatialRelationship = 'intersects'
+    query.returnGeometry = true
+    query.outFields = ['*']
+    query.num = 1
+    const response = await targetLayer.queryFeatures(query)
+    const graphic = response.features[0]
+    if (!graphic) return
 
-    onSelection(makeSelection(kind, hit.graphic, targetLayer, settings))
+    onSelection(makeSelection(kind, graphic, targetLayer, settings))
   })
 
   return {
