@@ -67,6 +67,7 @@ export interface AnalysisRuntime {
   analysePublicArea: (ocupacao: SelectedFeature) => Promise<PublicAreaResult>
   clearGraphics: () => void
   printAnalysis: (settings: AppMapSettings, title: string, analysisText: string, selectionText: string) => Promise<string>
+  exportMapImage: (format: 'png' | 'jpg') => Promise<string>
   destroy: () => void
 }
 
@@ -428,6 +429,11 @@ export async function createAnalysisRuntime(
     clearGraphics: () => {
       hatchLayer.removeAll()
       dimensionLayer.removeAll()
+    },
+    exportMapImage: async (format) => {
+      const screenshot = await view.takeScreenshot({ format })
+      if (!screenshot.dataUrl) throw new Error(`Não foi possível gerar a imagem ${format.toUpperCase()} do mapa.`)
+      return screenshot.dataUrl
     },
     printAnalysis: async (printSettings, title, analysisText, selectionText) => {
       const layout = printSettings.layoutName.trim() || 'MAP_ONLY'

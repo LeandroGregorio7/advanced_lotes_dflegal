@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   FileDown,
+  ImageDown,
   Layers3,
   LoaderCircle,
   MapPinned,
@@ -68,6 +69,7 @@ export default function Home() {
   const [isConfigurationOpen, setConfigurationOpen] = useState(true)
   const [isLoadingMap, setLoadingMap] = useState(false)
   const [isPrinting, setPrinting] = useState(false)
+  const [isExportingImage, setExportingImage] = useState(false)
   const [status, setStatus] = useState('Informe o ID do Web Map para iniciar a análise.')
   const [error, setError] = useState('')
   const [selection, setSelection] = useState<SelectedFeature | null>(null)
@@ -200,6 +202,26 @@ export default function Home() {
     }
   }
 
+  const exportMapImage = async (format: 'png' | 'jpg') => {
+    if (!runtimeRef.current) return
+    try {
+      setError('')
+      setExportingImage(true)
+      setStatus(`Gerando imagem ${format.toUpperCase()} da área atual do mapa…`)
+      const dataUrl = await runtimeRef.current.exportMapImage(format)
+      const link = document.createElement('a')
+      link.href = dataUrl
+      link.download = `advanced-lotes-df-legal-${new Date().toISOString().slice(0, 10)}.${format}`
+      link.click()
+      setStatus(`Imagem ${format.toUpperCase()} baixada com sucesso.`)
+    } catch (imageError) {
+      setError(imageError instanceof Error ? imageError.message : 'Não foi possível exportar a imagem do mapa.')
+      setStatus('Falha na exportação da imagem.')
+    } finally {
+      setExportingImage(false)
+    }
+  }
+
   const clearAnalysis = () => {
     runtimeRef.current?.clearGraphics()
     setDimensions([])
@@ -320,7 +342,15 @@ export default function Home() {
               {isPrinting ? <LoaderCircle className="animate-spin" size={18} /> : <FileDown size={18} />}
               {isPrinting ? 'Gerando PDF…' : 'Imprimir mapa analisado'}
             </Button>
-            <p className="print-hint">A impressão usa o serviço Export Web Map configurado e inclui os gráficos temporários do mapa.</p>
+            <p className="print-hint">O PDF usa o Export Web Map; a RA é ocultada somente durante a chamada. PNG/JPG são alternativas diretas da área atual do mapa.</p>
+            <div className="image-export-actions">
+              <Button onClick={() => void exportMapImage('png')} disabled={!mapIsLoaded || isPrinting || isExportingImage} variant="outline" className="image-export-button">
+                <ImageDown size={16} /> {isExportingImage ? 'Gerando…' : 'Baixar PNG'}
+              </Button>
+              <Button onClick={() => void exportMapImage('jpg')} disabled={!mapIsLoaded || isPrinting || isExportingImage} variant="outline" className="image-export-button">
+                <ImageDown size={16} /> {isExportingImage ? 'Gerando…' : 'Baixar JPG'}
+              </Button>
+            </div>
           </section>
 
           <button className="settings-toggle" onClick={() => setConfigurationOpen((open) => !open)} aria-expanded={isConfigurationOpen}>
