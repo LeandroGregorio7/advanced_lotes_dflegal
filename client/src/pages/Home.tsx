@@ -50,6 +50,146 @@ const formatSquareMeters = (value: number) =>
 const formatMeters = (value: number) =>
   `${value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
 
+const loadImage = (dataUrl: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+  const image = new Image()
+  image.onload = () => resolve(image)
+  image.onerror = () => reject(new Error('Não foi possível preparar a imagem do mapa.'))
+  image.src = dataUrl
+})
+
+const drawWrappedText = (context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
+  const words = text.split(' ')
+  let line = ''
+  let currentY = y
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word
+    if (context.measureText(candidate).width > maxWidth && line) {
+      context.fillText(line, x, currentY)
+      line = word
+      currentY += lineHeight
+    } else {
+      line = candidate
+    }
+  }
+  if (line) context.fillText(line, x, currentY)
+  return currentY + lineHeight
+}
+
+const composeLandscapeBoard = async (mapDataUrl: string, format: 'png' | 'jpg', dimensions: DimensionItem[], publicArea: PublicAreaResult | null, lotSelection: SelectedFeature | null, occupationSelection: SelectedFeature | null) => {
+  const image = await loadImage(mapDataUrl)
+  const canvas = document.createElement('canvas')
+  canvas.width = 1600
+  canvas.height = 900
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('O navegador não disponibilizou o canvas para a exportação.')
+
+  context.fillStyle = '#F4F0E8'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  const mapWidth = 1190
+  const mapHeight = Math.round(mapWidth / (image.width / image.height))
+  const mapY = Math.round((canvas.height - mapHeight) / 2)
+  context.fillStyle = '#FFFFFF'
+  context.fillRect(22, mapY - 22, mapWidth + 4, mapHeight + 44)
+  context.drawImage(image, 24, mapY, mapWidth, mapHeight)
+  context.strokeStyle = '#173C46'
+  context.lineWidth = 3
+  context.strokeRect(24, mapY, mapWidth, mapHeight)
+
+  const panelX = 1240
+  const panelWidth = 330
+  context.fillStyle = '#FFFFFF'
+  context.fillRect(panelX, 0, panelWidth, canvas.height)
+  context.fillStyle = '#0B3440'
+  context.fillRect(panelX, 0, panelWidth, 126)
+  context.fillStyle = '#FFFFFF'
+  context.font = '700 27px Arial'
+  context.fillText('DF Legal', panelX + 24, 44)
+  context.font = '700 19px Arial'
+  context.fillText('MAPA ANALISADO', panelX + 24, 78)
+  context.font = '14px Arial'
+  context.fillText('Advanced Lotes', panelX + 24, 103)
+
+  let y = 166
+  const contentX = panelX + 24
+  const contentWidth = panelWidth - 48
+  context.fillStyle = '#173C46'
+  context.font = '700 19px Arial'
+  context.fillText('IDENTIFICAÇÃO', contentX, y)
+  y += 34
+  context.font = '600 15px Arial'
+  context.fillText(lotSelection ? lotSelection.title : 'Lote não selecionado', contentX, y)
+  y += 24
+  context.font = '14px Arial'
+  y = drawWrappedText(context, lotSelection?.address ? `Endereço: ${lotSelection.address}` : 'Endereço: não informado', contentX, y, contentWidth, 20)
+  y += 16
+  context.fillStyle = '#C58A28'
+  context.fillRect(contentX, y, contentWidth, 2)
+  y += 32
+
+  context.fillStyle = '#173C46'
+  context.font = '700 19px Arial'
+  context.fillText('COTAS DOS SEGMENTOS', contentX, y)
+  y += 30
+  context.font = '14px Arial'
+  if (dimensions.length) {
+    for (const dimension of dimensions) {
+      context.fillStyle = '#526166'
+      context.fillText(dimension.label, contentX, y)
+      context.fillStyle = '#173C46'
+      context.font = '700 14px Arial'
+      context.fillText(formatMeters(dimension.length), contentX + 166, y)
+      context.font = '14px Arial'
+      y += 24
+    }
+  } else {
+    context.fillStyle = '#526166'
+    context.fillText('Nenhuma cota gerada.', contentX, y)
+    y += 24
+  }
+  y += 18
+  context.fillStyle = '#B93835'
+  context.fillRect(contentX, y, contentWidth, 2)
+  y += 32
+
+  context.fillStyle = '#B93835'
+  context.font = '700 19px Arial'
+  context.fillText('ÁREA PÚBLICA', contentX, y)
+  y += 30
+  context.fillStyle = '#173C46'
+  context.font = '14px Arial'
+  if (publicArea) {
+    const areaRows = [
+      ['Ocupação', formatSquareMeters(publicArea.reportedOccupationArea)],
+      ['Lote', formatSquareMeters(publicArea.reportedLotArea)],
+      ['Excedente', formatSquareMeters(publicArea.numericalExcess)],
+      ['Hachurado', formatSquareMeters(publicArea.geometricPublicArea)],
+    ]
+    for (const [label, value] of areaRows) {
+      context.fillStyle = '#526166'
+      context.fillText(label, contentX, y)
+      context.fillStyle = '#173C46'
+      context.font = '700 14px Arial'
+      context.fillText(value, contentX + 125, y)
+      context.font = '14px Arial'
+      y += 25
+    }
+    y += 12
+    context.fillStyle = publicArea.hasPublicArea ? '#B93835' : '#526166'
+    context.font = '700 14px Arial'
+    y = drawWrappedText(context, publicArea.hasPublicArea ? 'Área pública ocupada identificada.' : 'Não há área pública ocupada pela regra configurada.', contentX, y, contentWidth, 20)
+  } else {
+    context.fillStyle = '#526166'
+    context.fillText('Análise não executada.', contentX, y)
+    y += 24
+  }
+
+  context.fillStyle = '#526166'
+  context.font = '12px Arial'
+  context.fillText(`Gerado em ${new Date().toLocaleString('pt-BR')}`, contentX, 860)
+  const mime = format === 'jpg' ? 'image/jpeg' : 'image/png'
+  return canvas.toDataURL(mime, format === 'jpg' ? 0.94 : undefined)
+}
+
 const getStoredSettings = (): AppMapSettings => {
   try {
     const stored = window.localStorage.getItem(storageKey)
@@ -208,12 +348,13 @@ export default function Home() {
       setError('')
       setExportingImage(true)
       setStatus(`Gerando imagem ${format.toUpperCase()} da área atual do mapa…`)
-      const dataUrl = await runtimeRef.current.exportMapImage(format)
+      const mapDataUrl = await runtimeRef.current.exportMapImage(format)
+      const dataUrl = await composeLandscapeBoard(mapDataUrl, format, dimensions, publicArea, lotSelection, occupationSelection)
       const link = document.createElement('a')
       link.href = dataUrl
       link.download = `advanced-lotes-df-legal-${new Date().toISOString().slice(0, 10)}.${format}`
       link.click()
-      setStatus(`Imagem ${format.toUpperCase()} baixada com sucesso.`)
+      setStatus(`Prancha paisagem em ${format.toUpperCase()} baixada com mapa, cotas e quadro analítico.`)
     } catch (imageError) {
       setError(imageError instanceof Error ? imageError.message : 'Não foi possível exportar a imagem do mapa.')
       setStatus('Falha na exportação da imagem.')
