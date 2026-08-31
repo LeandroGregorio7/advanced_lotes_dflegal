@@ -445,9 +445,20 @@ export async function createAnalysisRuntime(
       })
       const parameters = new PrintParameters({ view, template })
       const executionMode = await print.getMode(printSettings.printServiceUrl)
-      const response = await print.execute(printSettings.printServiceUrl, parameters)
-      if (!response.url) throw new Error(`O serviço de impressão não retornou a URL do PDF. Modo: ${executionMode}; layout enviado: ${layout}.`)
-      return response.url
+      // Contorno do GPServer: a camada RA falha ao ser criada no Export Web Map.
+      // Ela permanece visível no mapa, mas é ocultada somente enquanto o payload é serializado.
+      const hiddenForPrint = webmap.allLayers
+        .toArray()
+        .filter((layer) => /regi(?:ão|ões)\s+administrativ|\bRA\b/i.test(layer.title || ''))
+        .map((layer) => ({ layer, visible: layer.visible }))
+      hiddenForPrint.forEach(({ layer }) => { layer.visible = false })
+      try {
+        const response = await print.execute(printSettings.printServiceUrl, parameters)
+        if (!response.url) throw new Error(`O serviço de impressão não retornou a URL do PDF. Modo: ${executionMode}; layout enviado: ${layout}.`)
+        return response.url
+      } finally {
+        hiddenForPrint.forEach(({ layer, visible }) => { layer.visible = visible })
+      }
     },
     destroy: () => {
       clickHandle.remove()

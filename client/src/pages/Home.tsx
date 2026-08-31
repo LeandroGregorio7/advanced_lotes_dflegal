@@ -213,7 +213,7 @@ export default function Home() {
     try {
       setError('')
       setPrinting(true)
-      setStatus('Enviando o mapa, as cotas e a hachura para o serviço de impressão…')
+      setStatus('Enviando mapa, cotas e hachura para o PDF… A RA é ocultada somente durante a impressão para contornar o erro do GPServer.')
       const analysisText = publicArea
         ? [
             `Área da ocupação: ${formatSquareMeters(publicArea.reportedOccupationArea)}`,
