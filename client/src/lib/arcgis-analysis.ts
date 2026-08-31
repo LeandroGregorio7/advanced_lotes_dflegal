@@ -38,6 +38,7 @@ export interface SelectedFeature {
   graphic: Graphic
   title: string
   reportedArea: number
+  address?: string
 }
 
 export interface DimensionItem {
@@ -122,11 +123,12 @@ const normalizedRing = (ring: number[][]) => {
   return vertices
 }
 
-const makeSelection = (kind: FeatureKind, graphic: Graphic, layer: FeatureLayer, settings: AppMapSettings): SelectedFeature => ({
+const makeSelection = (kind: FeatureKind, graphic: Graphic, layer: FeatureLayer, settings: AppMapSettings, addressField?: string): SelectedFeature => ({
   kind,
   graphic,
   title: featureTitle(layer, graphic),
-  reportedArea: reportedOrGeometricArea(graphic, kind === 'lote' ? settings.lotAreaField : settings.occupationAreaField)
+  reportedArea: reportedOrGeometricArea(graphic, kind === 'lote' ? settings.lotAreaField : settings.occupationAreaField),
+  address: addressField ? String(graphic.attributes?.[addressField] ?? '').trim() || undefined : undefined,
 })
 
 const ensurePolygon = (graphic: Graphic, layerLabel: string) => {
@@ -284,9 +286,12 @@ export async function createAnalysisRuntime(
 
   // O Web Map operacional mantém esta camada desligada. Ela é exibida somente
   // durante a escolha de ocupação, sem salvar nem modificar o item do Portal.
-  occupationLayer.visible = getSelectionMode() === 'ocupacao'
-  occupationLayer.opacity = 0.18
-  lotLayer.opacity = 0.76
+  // As duas camadas operacionais ficam visíveis; o modo controla apenas qual delas recebe o clique.
+  // Isso preserva a leitura conjunta do lote e da ocupação sem editar o Web Map do Portal.
+  lotLayer.visible = true
+  occupationLayer.visible = true
+  occupationLayer.opacity = 0.34
+  lotLayer.opacity = 0.82
 
   const selectFeature = async (selected: SelectedFeature, zoomToFeature = false) => {
     selectionLayer.graphics
@@ -315,16 +320,21 @@ export async function createAnalysisRuntime(
     const value = searchText.trim().replace(/'/g, "''")
     if (value.length < 2) return []
     const layer = kind === 'lote' ? lotLayer : occupationLayer
-    const fields = kind === 'lote'
-      ? ['pu_ciu', 'pu_end_car', 'pu_end_usu']
-      : ['ct_ciu', 'lt_enderec', 'lt_nome']
+    const availableFields = new Set(layer.fields.map((field) => field.name.toLowerCase()))
+    const candidates = kind === 'lote'
+      ? ['pu_ciu', 'end_car', 'pu_end_car', 'pu_end_usu']
+      : ['ct_ciu', 'end_car', 'lt_enderec', 'lt_nome']
+    const fields = candidates.filter((field) => availableFields.has(field.toLowerCase()))
+    const addressField = (kind === 'lote' ? ['end_car', 'pu_end_car', 'pu_end_usu'] : ['end_car', 'lt_enderec', 'lt_nome'])
+      .find((field) => availableFields.has(field.toLowerCase()))
+    if (!fields.length) throw new Error(`A camada ${layer.title} não possui campos de CIU ou endereço configurados.`)
     const query = layer.createQuery()
     query.where = fields.map((field) => `UPPER(${field}) LIKE UPPER('%${value}%')`).join(' OR ')
     query.outFields = ['*']
     query.returnGeometry = true
     query.num = 8
     const response = await layer.queryFeatures(query)
-    return response.features.map((graphic) => makeSelection(kind, graphic, layer, settings))
+    return response.features.map((graphic) => makeSelection(kind, graphic, layer, settings, addressField))
   }
 
   const clickHandle = view.on('click', async (event) => {
@@ -347,7 +357,8 @@ export async function createAnalysisRuntime(
     view,
     layerTitles: webmap.allLayers.toArray().map((layer) => layer.title || '').filter(Boolean),
     setSelectionMode: (mode) => {
-      occupationLayer.visible = mode === 'ocupacao'
+      lotLayer.visible = true
+      occupationLayer.visible = true
     },
     searchFeatures,
     selectFeature,

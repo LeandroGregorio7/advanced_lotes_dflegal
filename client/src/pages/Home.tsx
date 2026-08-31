@@ -29,8 +29,8 @@ import {
 } from '@/lib/arcgis-analysis'
 
 const portalDefault = 'https://monitora.dflegal.df.gov.br/portal'
-const printDefault = 'https://monitora.dflegal.df.gov.br/server/rest/services/ExportWebMap/GPServer/Export%20Web%20Map'
-const storageKey = 'advanced-lotes-dflegal-settings-v1'
+const printDefault = 'https://monitora.dflegal.df.gov.br/server/rest/services/DF_Legal_Printer_Service_V5/GPServer/Export%20Web%20Map'
+const storageKey = 'advanced-lotes-dflegal-settings-v2'
 
 const defaultSettings: AppMapSettings = {
   portalUrl: portalDefault,
@@ -230,8 +230,9 @@ export default function Home() {
       window.open(fileUrl, '_blank', 'noopener,noreferrer')
       setStatus('PDF gerado. A nova aba contém o arquivo devolvido pelo serviço.')
     } catch (printError) {
-      setError(printError instanceof Error ? printError.message : 'O serviço não retornou o PDF.')
-      setStatus('Falha na impressão. Verifique autenticação, CORS e os logs do GPServer.')
+      const message = printError instanceof Error ? printError.message : 'O serviço não retornou o PDF.'
+      setError(message)
+      setStatus('Falha na impressão. O serviço V5 não devolveu o PDF; confira a URL da tarefa e o log do GPServer.')
     } finally {
       setPrinting(false)
     }
@@ -292,6 +293,7 @@ export default function Home() {
                   {searchResults.map((result) => (
                     <button type="button" key={`${result.kind}-${result.title}`} onClick={() => void selectSearchResult(result)}>
                       <strong>{result.title}</strong>
+                      {result.address && <small>Endereço: {result.address}</small>}
                       <small>Área: {formatSquareMeters(result.reportedArea)}</small>
                     </button>
                   ))}
@@ -358,6 +360,7 @@ export default function Home() {
           <div className={`selection-chip ${selection.kind}`}>
             <span>{selection.kind === 'lote' ? 'LOTE SELECIONADO' : 'OCUPAÇÃO SELECIONADA'}</span>
             <strong>{selection.title}</strong>
+            {selection.address && <small>Endereço: {selection.address}</small>}
             <small>Área informada: {formatSquareMeters(selection.reportedArea)}</small>
           </div>
         )}
