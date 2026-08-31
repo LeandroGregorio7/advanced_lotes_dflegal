@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input'
 import {
   AppMapSettings,
   AnalysisRuntime,
+  MapCapture,
   DimensionItem,
   FeatureKind,
   PublicAreaResult,
@@ -44,6 +45,8 @@ const defaultSettings: AppMapSettings = {
   layoutName: 'layout_a4_paisagem',
 }
 
+const officialLogoUrl = 'https://dflegal.df.gov.br/documents/9313432/9332158/Logo-DF-Legal.jpg/35530d0b-5442-08fb-c952-573edd9364d4?version=1.0&t=1740344032613&imagePreview=1'
+
 const formatSquareMeters = (value: number) =>
   `${value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m²`
 
@@ -52,6 +55,7 @@ const formatMeters = (value: number) =>
 
 const loadImage = (dataUrl: string) => new Promise<HTMLImageElement>((resolve, reject) => {
   const image = new Image()
+  image.crossOrigin = 'anonymous'
   image.onload = () => resolve(image)
   image.onerror = () => reject(new Error('Não foi possível preparar a imagem do mapa.'))
   image.src = dataUrl
@@ -75,41 +79,96 @@ const drawWrappedText = (context: CanvasRenderingContext2D, text: string, x: num
   return currentY + lineHeight
 }
 
-const composeLandscapeBoard = async (mapDataUrl: string, format: 'png' | 'jpg', dimensions: DimensionItem[], publicArea: PublicAreaResult | null, lotSelection: SelectedFeature | null, occupationSelection: SelectedFeature | null) => {
-  const image = await loadImage(mapDataUrl)
+const drawAttributeBlock = (context: CanvasRenderingContext2D, title: string, fields: string[], feature: SelectedFeature | null, x: number, y: number, width: number) => {
+  context.fillStyle = '#173C46'
+  context.font = '700 16px Arial'
+  context.fillText(title, x, y)
+  let currentY = y + 24
+  context.font = '11px Arial'
+  for (const field of fields) {
+    const value = feature?.graphic.attributes?.[field]
+    const text = value === null || value === undefined || String(value).trim() === '' ? 'não informado' : String(value)
+    context.fillStyle = '#526166'
+    context.font = '700 11px Arial'
+    context.fillText(`${field}:`, x, currentY)
+    context.fillStyle = '#173C46'
+    context.font = '11px Arial'
+    currentY = drawWrappedText(context, text, x + 82, currentY, width - 82, 14)
+    currentY += 3
+  }
+  return currentY + 10
+}
+
+const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg', dimensions: DimensionItem[], publicArea: PublicAreaResult | null, lotSelection: SelectedFeature | null, occupationSelection: SelectedFeature | null) => {
+  const image = await loadImage(capture.dataUrl)
   const canvas = document.createElement('canvas')
-  canvas.width = 1600
-  canvas.height = 900
+  canvas.width = 2000
+  canvas.height = 1100
   const context = canvas.getContext('2d')
   if (!context) throw new Error('O navegador não disponibilizou o canvas para a exportação.')
 
   context.fillStyle = '#F4F0E8'
   context.fillRect(0, 0, canvas.width, canvas.height)
-  const mapWidth = 1190
+  const mapWidth = 1370
   const mapHeight = Math.round(mapWidth / (image.width / image.height))
   const mapY = Math.round((canvas.height - mapHeight) / 2)
   context.fillStyle = '#FFFFFF'
   context.fillRect(22, mapY - 22, mapWidth + 4, mapHeight + 44)
   context.drawImage(image, 24, mapY, mapWidth, mapHeight)
+
+  // Grade calculada a partir da extensão real da vista e rotulada na referência espacial do mapa.
+  const { xmin, ymin, xmax, ymax } = capture.extent
+  const gridX = (value: number) => 24 + ((value - xmin) / (xmax - xmin)) * mapWidth
+  const gridY = (value: number) => mapY + mapHeight - ((value - ymin) / (ymax - ymin)) * mapHeight
+  const formatCoordinate = (value: number) => value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  context.save()
+  context.strokeStyle = 'rgba(11, 52, 64, 0.42)'
+  context.fillStyle = '#173C46'
+  context.lineWidth = 1
+  context.font = '12px Arial'
+  for (let index = 1; index < 5; index += 1) {
+    const xValue = xmin + ((xmax - xmin) * index) / 5
+    const yValue = ymin + ((ymax - ymin) * index) / 5
+    const x = gridX(xValue)
+    const y = gridY(yValue)
+    context.beginPath(); context.moveTo(x, mapY); context.lineTo(x, mapY + mapHeight); context.stroke()
+    context.beginPath(); context.moveTo(24, y); context.lineTo(24 + mapWidth, y); context.stroke()
+    context.fillText(formatCoordinate(xValue), x - 34, mapY - 8)
+    context.fillText(formatCoordinate(yValue), 28, y - 4)
+  }
+  context.restore()
   context.strokeStyle = '#173C46'
   context.lineWidth = 3
   context.strokeRect(24, mapY, mapWidth, mapHeight)
 
-  const panelX = 1240
-  const panelWidth = 330
+  const panelX = 1430
+  const panelWidth = 570
   context.fillStyle = '#FFFFFF'
   context.fillRect(panelX, 0, panelWidth, canvas.height)
   context.fillStyle = '#0B3440'
   context.fillRect(panelX, 0, panelWidth, 126)
+  try {
+    const officialLogo = await loadImage(officialLogoUrl)
+    context.drawImage(officialLogo, panelX + 24, 18, 170, 62)
+  } catch {
+    context.fillStyle = '#FFFFFF'
+    context.font = '700 28px Arial'
+    context.fillText('DF Legal', panelX + 24, 52)
+  }
   context.fillStyle = '#FFFFFF'
-  context.font = '700 27px Arial'
-  context.fillText('DF Legal', panelX + 24, 44)
   context.font = '700 19px Arial'
-  context.fillText('MAPA ANALISADO', panelX + 24, 78)
+  context.fillText('MAPA ANALISADO', panelX + 220, 48)
   context.font = '14px Arial'
-  context.fillText('Advanced Lotes', panelX + 24, 103)
+  context.fillText('Advanced Lotes · DF Legal', panelX + 220, 76)
+  context.fillStyle = '#526166'
+  context.font = '12px Arial'
+  const wkid = capture.spatialReference.latestWkid || capture.spatialReference.wkid
+  const referenceName = wkid === 3857 || wkid === 102100 ? 'WGS 84 / Web Mercator' : `Referência espacial WKID ${wkid || 'não informada'}`
+  context.fillText(`Escala 1:${Math.round(capture.scale || 0).toLocaleString('pt-BR')}`, panelX + 24, 112)
+  context.fillText(`Zoom ${capture.zoom.toFixed(2)} · EPSG:${wkid || '—'}`, panelX + 24, 130)
+  context.fillText(referenceName, panelX + 24, 148)
 
-  let y = 166
+  let y = 180
   const contentX = panelX + 24
   const contentWidth = panelWidth - 48
   context.fillStyle = '#173C46'
@@ -183,9 +242,42 @@ const composeLandscapeBoard = async (mapDataUrl: string, format: 'png' | 'jpg', 
     y += 24
   }
 
+  y = Math.max(y + 22, 640)
+  context.fillStyle = '#C58A28'
+  context.fillRect(contentX, y, contentWidth, 2)
+  y += 28
+  context.fillStyle = '#173C46'
+  context.font = '700 19px Arial'
+  context.fillText('ATRIBUTOS COMPLETOS', contentX, y)
+  y += 28
+  const lotFields = ['pu_ciu', 'pu_projeto', 'pu_end_car', 'pu_end_usu', 'x', 'y', 'pn_norma', 'pn_uso', 'pn_norma_a']
+  const occupationFields = ['ct_ciu', 'ct_origem', 'lt_enderec', 'lt_ra', 'st_area_sh']
+  const leftColumnY = drawAttributeBlock(context, 'LOTE REGISTRADO', lotFields, lotSelection, contentX, y, 250)
+  drawAttributeBlock(context, 'OCUPAÇÃO IDENTIFICADA', occupationFields, occupationSelection, contentX + 285, y, 240)
+
+  const legendY = 930
+  context.fillStyle = '#C58A28'
+  context.fillRect(contentX, legendY, contentWidth, 2)
+  context.fillStyle = '#173C46'
+  context.font = '700 16px Arial'
+  context.fillText('LEGENDA', contentX, legendY + 26)
+  context.font = '13px Arial'
+  context.fillStyle = '#E5D95A'
+  context.fillRect(contentX, legendY + 40, 20, 14)
+  context.fillStyle = '#173C46'
+  context.fillText('Lotes Registrados', contentX + 30, legendY + 52)
+  context.fillStyle = '#F35B87'
+  context.fillRect(contentX, legendY + 62, 20, 14)
+  context.fillStyle = '#173C46'
+  context.fillText('Ocupações Identificadas', contentX + 30, legendY + 74)
+  context.strokeStyle = '#FFE46E'
+  context.strokeRect(contentX + 260, legendY + 40, 20, 14)
+  context.fillStyle = '#B93835'
+  context.font = '700 13px Arial'
+  context.fillText('Área pública ocupada (hachura)', contentX + 290, legendY + 52)
   context.fillStyle = '#526166'
   context.font = '12px Arial'
-  context.fillText(`Gerado em ${new Date().toLocaleString('pt-BR')}`, contentX, 860)
+  context.fillText(`Gerado em ${new Date().toLocaleString('pt-BR')}`, contentX, 1070)
   const mime = format === 'jpg' ? 'image/jpeg' : 'image/png'
   return canvas.toDataURL(mime, format === 'jpg' ? 0.94 : undefined)
 }
@@ -348,8 +440,8 @@ export default function Home() {
       setError('')
       setExportingImage(true)
       setStatus(`Gerando imagem ${format.toUpperCase()} da área atual do mapa…`)
-      const mapDataUrl = await runtimeRef.current.exportMapImage(format)
-      const dataUrl = await composeLandscapeBoard(mapDataUrl, format, dimensions, publicArea, lotSelection, occupationSelection)
+      const capture = await runtimeRef.current.exportMapImage(format)
+      const dataUrl = await composeLandscapeBoard(capture, format, dimensions, publicArea, lotSelection, occupationSelection)
       const link = document.createElement('a')
       link.href = dataUrl
       link.download = `advanced-lotes-df-legal-${new Date().toISOString().slice(0, 10)}.${format}`
@@ -411,7 +503,7 @@ export default function Home() {
         <div className="rail-texture" style={{ backgroundImage: 'url(/manus-storage/cartographic-workbench-wide_55f61441.jpg)' }} />
         <div className="rail-content">
           <header className="brand-lockup">
-            <img src="/manus-storage/advanced-lotes-logo_1aed79e5.png" alt="Símbolo Advanced Lotes DF Legal" className="brand-mark" />
+            <img src={officialLogoUrl} alt="Logo oficial DF Legal" className="brand-mark" />
             <div>
               <p className="eyebrow">DF LEGAL · ANÁLISE ESPACIAL</p>
               <h1>Advanced<br />Lotes</h1>

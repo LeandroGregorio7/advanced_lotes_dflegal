@@ -46,6 +46,14 @@ export interface DimensionItem {
   length: number
 }
 
+export interface MapCapture {
+  dataUrl: string
+  extent: { xmin: number; ymin: number; xmax: number; ymax: number }
+  spatialReference: { wkid?: number; latestWkid?: number; wkt?: string }
+  scale: number
+  zoom: number
+}
+
 export interface PublicAreaResult {
   lot: SelectedFeature
   occupation: SelectedFeature
@@ -67,7 +75,7 @@ export interface AnalysisRuntime {
   analysePublicArea: (ocupacao: SelectedFeature) => Promise<PublicAreaResult>
   clearGraphics: () => void
   printAnalysis: (settings: AppMapSettings, title: string, analysisText: string, selectionText: string) => Promise<string>
-  exportMapImage: (format: 'png' | 'jpg') => Promise<string>
+  exportMapImage: (format: 'png' | 'jpg') => Promise<MapCapture>
   destroy: () => void
 }
 
@@ -432,8 +440,20 @@ export async function createAnalysisRuntime(
     },
     exportMapImage: async (format) => {
       const screenshot = await view.takeScreenshot({ format })
-      if (!screenshot.dataUrl) throw new Error(`Não foi possível gerar a imagem ${format.toUpperCase()} do mapa.`)
-      return screenshot.dataUrl
+      const extent = view.extent
+      if (!screenshot.dataUrl || !extent) throw new Error(`Não foi possível gerar a imagem ${format.toUpperCase()} do mapa.`)
+      const spatialReference = view.spatialReference as (__esri.SpatialReference & { latestWkid?: number | null })
+      return {
+        dataUrl: screenshot.dataUrl,
+        extent: { xmin: extent.xmin, ymin: extent.ymin, xmax: extent.xmax, ymax: extent.ymax },
+        spatialReference: {
+          wkid: spatialReference?.wkid ?? undefined,
+          latestWkid: spatialReference?.latestWkid ?? undefined,
+          wkt: spatialReference?.wkt ?? undefined,
+        },
+        scale: view.scale ?? 0,
+        zoom: view.zoom ?? 0,
+      }
     },
     printAnalysis: async (printSettings, title, analysisText, selectionText) => {
       const layout = printSettings.layoutName.trim() || 'MAP_ONLY'
