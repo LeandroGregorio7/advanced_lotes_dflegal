@@ -103,50 +103,62 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   const image = await loadImage(capture.dataUrl)
   const canvas = document.createElement('canvas')
   canvas.width = 2000
-  canvas.height = 1100
+  canvas.height = 1200
   const context = canvas.getContext('2d')
   if (!context) throw new Error('O navegador não disponibilizou o canvas para a exportação.')
 
   context.fillStyle = '#F4F0E8'
   context.fillRect(0, 0, canvas.width, canvas.height)
-  const mapWidth = 1370
+  const mapX = 112
+  const mapWidth = 1280
   const mapHeight = Math.round(mapWidth / (image.width / image.height))
-  const mapY = Math.round((canvas.height - mapHeight) / 2)
+  const mapY = 220
   context.fillStyle = '#FFFFFF'
-  context.fillRect(22, mapY - 22, mapWidth + 4, mapHeight + 44)
-  context.drawImage(image, 24, mapY, mapWidth, mapHeight)
+  context.fillRect(mapX - 8, mapY - 28, mapWidth + 16, mapHeight + 56)
+  context.drawImage(image, mapX, mapY, mapWidth, mapHeight)
 
   // Grade calculada a partir da extensão real da vista e rotulada na referência espacial do mapa.
   const { xmin, ymin, xmax, ymax } = capture.extent
-  const gridX = (value: number) => 24 + ((value - xmin) / (xmax - xmin)) * mapWidth
+  const gridX = (value: number) => mapX + ((value - xmin) / (xmax - xmin)) * mapWidth
   const gridY = (value: number) => mapY + mapHeight - ((value - ymin) / (ymax - ymin)) * mapHeight
   const formatCoordinate = (value: number) => value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   context.save()
-  context.strokeStyle = 'rgba(11, 52, 64, 0.42)'
+  context.strokeStyle = '#526166'
   context.fillStyle = '#173C46'
   context.lineWidth = 1
-  context.font = '12px Arial'
-  for (let index = 1; index < 5; index += 1) {
+  context.font = '11px Arial'
+  for (let index = 0; index <= 5; index += 1) {
     const xValue = xmin + ((xmax - xmin) * index) / 5
     const yValue = ymin + ((ymax - ymin) * index) / 5
     const x = gridX(xValue)
     const y = gridY(yValue)
-    context.beginPath(); context.moveTo(x, mapY); context.lineTo(x, mapY + mapHeight); context.stroke()
-    context.beginPath(); context.moveTo(24, y); context.lineTo(24 + mapWidth, y); context.stroke()
-    context.fillText(formatCoordinate(xValue), x - 34, mapY - 8)
-    context.fillText(formatCoordinate(yValue), 28, y - 4)
+    context.beginPath(); context.moveTo(x, mapY - 7); context.lineTo(x, mapY); context.stroke()
+    context.beginPath(); context.moveTo(mapX - 7, y); context.lineTo(mapX, y); context.stroke()
+    context.fillText(formatCoordinate(xValue), x - 38, mapY - 12)
+    context.save()
+    context.translate(mapX - 28, y + 34)
+    context.rotate(-Math.PI / 2)
+    context.fillText(formatCoordinate(yValue), 0, 0)
+    context.restore()
   }
+  context.font = '700 12px Arial'
+  context.fillText('X', mapX + mapWidth + 10, mapY - 12)
+  context.save()
+  context.translate(32, mapY + mapHeight / 2 + 28)
+  context.rotate(-Math.PI / 2)
+  context.fillText('Y — coordenadas ascendentes', 0, 0)
+  context.restore()
   context.restore()
   context.strokeStyle = '#173C46'
   context.lineWidth = 3
-  context.strokeRect(24, mapY, mapWidth, mapHeight)
+  context.strokeRect(mapX, mapY, mapWidth, mapHeight)
 
   const panelX = 1430
   const panelWidth = 570
   context.fillStyle = '#FFFFFF'
   context.fillRect(panelX, 0, panelWidth, canvas.height)
   context.fillStyle = '#0B3440'
-  context.fillRect(panelX, 0, panelWidth, 126)
+  context.fillRect(panelX, 0, panelWidth, 110)
   try {
     const officialLogo = await loadImage(officialLogoUrl)
     context.drawImage(officialLogo, panelX + 24, 18, 170, 62)
@@ -164,11 +176,11 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   context.font = '12px Arial'
   const wkid = capture.spatialReference.latestWkid || capture.spatialReference.wkid
   const referenceName = wkid === 3857 || wkid === 102100 ? 'WGS 84 / Web Mercator' : `Referência espacial WKID ${wkid || 'não informada'}`
-  context.fillText(`Escala 1:${Math.round(capture.scale || 0).toLocaleString('pt-BR')}`, panelX + 24, 130)
-  context.fillText(`Zoom ${capture.zoom.toFixed(2)} · EPSG:${wkid || '—'}`, panelX + 24, 148)
-  context.fillText(referenceName, panelX + 24, 166)
+  context.fillText(`Escala 1:${Math.round(capture.scale || 0).toLocaleString('pt-BR')}`, panelX + 24, 142)
+  context.fillText(`Zoom ${capture.zoom.toFixed(2)} · EPSG:${wkid || '—'}`, panelX + 24, 162)
+  context.fillText(referenceName, panelX + 24, 182)
 
-  let y = 198
+  let y = 220
   const contentX = panelX + 24
   const contentWidth = panelWidth - 48
   context.fillStyle = '#173C46'
@@ -260,7 +272,7 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   context.beginPath(); context.moveTo(contentX + 270, y - 14); context.lineTo(contentX + 270, 920); context.stroke()
   drawAttributeBlock(context, 'OCUPAÇÃO IDENTIFICADA', occupationFields, occupationSelection, contentX + 295, y, 240)
 
-  const legendY = 930
+  const legendY = 1018
   context.fillStyle = '#C58A28'
   context.fillRect(contentX, legendY, contentWidth, 2)
   context.fillStyle = '#173C46'
@@ -286,7 +298,7 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16)
   context.fillStyle = '#526166'
   context.font = '12px Arial'
-  context.fillText(`Gerado em ${new Date().toLocaleString('pt-BR')}`, contentX, 1070)
+  context.fillText(`Gerado em ${new Date().toLocaleString('pt-BR')}`, contentX, 1168)
   const mime = format === 'jpg' ? 'image/jpeg' : 'image/png'
   return canvas.toDataURL(mime, format === 'jpg' ? 0.94 : undefined)
 }
