@@ -118,7 +118,7 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   context.drawImage(image, mapX, mapY, mapWidth, mapHeight)
 
   // Grade calculada a partir da extensão real da vista e rotulada na referência espacial do mapa.
-  const { xmin, ymin, xmax, ymax } = capture.extent
+  const { xmin, ymin, xmax, ymax } = capture.geographicExtent
   const gridX = (value: number) => mapX + ((value - xmin) / (xmax - xmin)) * mapWidth
   const gridY = (value: number) => mapY + mapHeight - ((value - ymin) / (ymax - ymin)) * mapHeight
   const formatCoordinate = (value: number) => value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -142,11 +142,11 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
     context.restore()
   }
   context.font = '700 12px Arial'
-  context.fillText('X', mapX + mapWidth + 10, mapY - 12)
+  context.fillText('Longitude (°)', mapX + mapWidth - 84, mapY - 12)
   context.save()
   context.translate(32, mapY + mapHeight / 2 + 28)
   context.rotate(-Math.PI / 2)
-  context.fillText('Y — coordenadas ascendentes', 0, 0)
+  context.fillText('Latitude (°) — crescente para o norte', 0, 0)
   context.restore()
   context.restore()
   context.strokeStyle = '#173C46'
@@ -178,9 +178,10 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   const referenceName = wkid === 3857 || wkid === 102100 ? 'WGS 84 / Web Mercator' : `Referência espacial WKID ${wkid || 'não informada'}`
   context.fillText(`Escala 1:${Math.round(capture.scale || 0).toLocaleString('pt-BR')}`, panelX + 24, 142)
   context.fillText(`Zoom ${capture.zoom.toFixed(2)} · EPSG:${wkid || '—'}`, panelX + 24, 162)
-  context.fillText(referenceName, panelX + 24, 182)
+  context.fillText('Grade: Longitude/Latitude · WGS 84 / EPSG:4326', panelX + 24, 182)
+  context.fillText('Visualização do mapa: Web Mercator / EPSG:3857', panelX + 24, 200)
 
-  let y = 220
+  let y = 232
   const contentX = panelX + 24
   const contentWidth = panelWidth - 48
   context.fillStyle = '#173C46'

@@ -12,6 +12,7 @@ import Point from '@arcgis/core/geometry/Point'
 import Polygon from '@arcgis/core/geometry/Polygon'
 import Polyline from '@arcgis/core/geometry/Polyline'
 import * as geometryEngine from '@arcgis/core/geometry/geometryEngine'
+import * as webMercatorUtils from '@arcgis/core/geometry/support/webMercatorUtils'
 import SimpleFillSymbol from '@arcgis/core/symbols/SimpleFillSymbol'
 import SimpleLineSymbol from '@arcgis/core/symbols/SimpleLineSymbol'
 import SimpleMarkerSymbol from '@arcgis/core/symbols/SimpleMarkerSymbol'
@@ -49,6 +50,7 @@ export interface DimensionItem {
 export interface MapCapture {
   dataUrl: string
   extent: { xmin: number; ymin: number; xmax: number; ymax: number }
+  geographicExtent: { xmin: number; ymin: number; xmax: number; ymax: number }
   spatialReference: { wkid?: number; latestWkid?: number; wkt?: string }
   scale: number
   zoom: number
@@ -453,9 +455,11 @@ export async function createAnalysisRuntime(
       const extent = view.extent
       if (!screenshot.dataUrl || !extent) throw new Error(`Não foi possível gerar a imagem ${format.toUpperCase()} do mapa.`)
       const spatialReference = view.spatialReference as (__esri.SpatialReference & { latestWkid?: number | null })
+      const geographicExtent = webMercatorUtils.webMercatorToGeographic(extent) as __esri.Extent
       return {
         dataUrl: screenshot.dataUrl,
         extent: { xmin: extent.xmin, ymin: extent.ymin, xmax: extent.xmax, ymax: extent.ymax },
+        geographicExtent: { xmin: geographicExtent.xmin, ymin: geographicExtent.ymin, xmax: geographicExtent.xmax, ymax: geographicExtent.ymax },
         spatialReference: {
           wkid: spatialReference?.wkid ?? undefined,
           latestWkid: spatialReference?.latestWkid ?? undefined,
