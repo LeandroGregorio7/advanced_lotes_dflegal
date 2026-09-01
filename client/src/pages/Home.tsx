@@ -156,31 +156,30 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
     context.fillText('DF Legal', panelX + 24, 52)
   }
   context.fillStyle = '#FFFFFF'
-  context.font = '700 19px Arial'
-  context.fillText('MAPA ANALISADO', panelX + 220, 48)
+  context.font = '700 17px Arial'
+  drawWrappedText(context, 'Mapa Temático Consulta Lote registrado e área pública ocupada', panelX + 220, 42, 320, 22)
   context.font = '14px Arial'
-  context.fillText('Advanced Lotes · DF Legal', panelX + 220, 76)
+  context.fillText('Advanced Lotes · DF Legal', panelX + 220, 96)
   context.fillStyle = '#526166'
   context.font = '12px Arial'
   const wkid = capture.spatialReference.latestWkid || capture.spatialReference.wkid
   const referenceName = wkid === 3857 || wkid === 102100 ? 'WGS 84 / Web Mercator' : `Referência espacial WKID ${wkid || 'não informada'}`
-  context.fillText(`Escala 1:${Math.round(capture.scale || 0).toLocaleString('pt-BR')}`, panelX + 24, 112)
-  context.fillText(`Zoom ${capture.zoom.toFixed(2)} · EPSG:${wkid || '—'}`, panelX + 24, 130)
-  context.fillText(referenceName, panelX + 24, 148)
+  context.fillText(`Escala 1:${Math.round(capture.scale || 0).toLocaleString('pt-BR')}`, panelX + 24, 130)
+  context.fillText(`Zoom ${capture.zoom.toFixed(2)} · EPSG:${wkid || '—'}`, panelX + 24, 148)
+  context.fillText(referenceName, panelX + 24, 166)
 
-  let y = 180
+  let y = 198
   const contentX = panelX + 24
   const contentWidth = panelWidth - 48
   context.fillStyle = '#173C46'
   context.font = '700 19px Arial'
-  context.fillText('IDENTIFICAÇÃO', contentX, y)
-  y += 34
-  context.font = '600 15px Arial'
-  context.fillText(lotSelection ? lotSelection.title : 'Lote não selecionado', contentX, y)
-  y += 24
+  context.fillText('IDENTIFICAÇÃO DO LOTE REGISTRADO', contentX, y)
+  y += 30
   context.font = '14px Arial'
-  y = drawWrappedText(context, lotSelection?.address ? `Endereço: ${lotSelection.address}` : 'Endereço: não informado', contentX, y, contentWidth, 20)
-  y += 16
+  y = drawWrappedText(context, lotSelection?.graphic.attributes?.pu_end_car || lotSelection?.graphic.attributes?.end_car || lotSelection?.address || 'Endereço não informado', contentX, y, contentWidth, 20)
+  y += 4
+  context.fillText(`CIU ${lotSelection?.graphic.attributes?.pu_ciu || lotSelection?.graphic.attributes?.ciu || 'não informado'}`, contentX, y)
+  y += 24
   context.fillStyle = '#C58A28'
   context.fillRect(contentX, y, contentWidth, 2)
   y += 32
@@ -235,7 +234,10 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
     y += 12
     context.fillStyle = publicArea.hasPublicArea ? '#B93835' : '#526166'
     context.font = '700 14px Arial'
-    y = drawWrappedText(context, publicArea.hasPublicArea ? 'Área pública ocupada identificada.' : 'Não há área pública ocupada pela regra configurada.', contentX, y, contentWidth, 20)
+    y = drawWrappedText(context, publicArea.hasPublicArea ? `Área pública ocupada identificada: área total ${formatSquareMeters(publicArea.geometricPublicArea)}.` : 'Não há área pública ocupada pela regra configurada.', contentX, y, contentWidth, 20)
+    context.fillStyle = '#526166'
+    context.font = '12px Arial'
+    y = drawWrappedText(context, 'Hachura = diferença espacial entre ocupação e lote. Excedente = diferença numérica entre as áreas informadas na tabela.', contentX, y + 2, contentWidth, 17)
   } else {
     context.fillStyle = '#526166'
     context.fillText('Análise não executada.', contentX, y)
@@ -248,12 +250,15 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   y += 28
   context.fillStyle = '#173C46'
   context.font = '700 19px Arial'
-  context.fillText('ATRIBUTOS COMPLETOS', contentX, y)
+  context.fillText('DADOS DO LOTE REGISTRADO E OCUPAÇÃO IDENTIFICADA', contentX, y)
   y += 28
   const lotFields = ['pu_ciu', 'pu_projeto', 'pu_end_car', 'pu_end_usu', 'x', 'y', 'pn_norma', 'pn_uso', 'pn_norma_a']
   const occupationFields = ['ct_ciu', 'ct_origem', 'lt_enderec', 'lt_ra', 'st_area_sh']
-  const leftColumnY = drawAttributeBlock(context, 'LOTE REGISTRADO', lotFields, lotSelection, contentX, y, 250)
-  drawAttributeBlock(context, 'OCUPAÇÃO IDENTIFICADA', occupationFields, occupationSelection, contentX + 285, y, 240)
+  drawAttributeBlock(context, 'LOTE REGISTRADO', lotFields, lotSelection, contentX, y, 250)
+  context.strokeStyle = '#9AA2A4'
+  context.lineWidth = 2
+  context.beginPath(); context.moveTo(contentX + 270, y - 14); context.lineTo(contentX + 270, 920); context.stroke()
+  drawAttributeBlock(context, 'OCUPAÇÃO IDENTIFICADA', occupationFields, occupationSelection, contentX + 295, y, 240)
 
   const legendY = 930
   context.fillStyle = '#C58A28'
@@ -265,6 +270,7 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   context.fillStyle = '#E5D95A'
   context.fillRect(contentX, legendY + 40, 20, 14)
   context.fillStyle = '#173C46'
+  context.font = '700 13px Arial'
   context.fillText('Lotes Registrados', contentX + 30, legendY + 52)
   context.fillStyle = '#F35B87'
   context.fillRect(contentX, legendY + 62, 20, 14)
@@ -275,6 +281,9 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   context.fillStyle = '#B93835'
   context.font = '700 13px Arial'
   context.fillText('Área pública ocupada (hachura)', contentX + 290, legendY + 52)
+  context.strokeStyle = '#4E5B60'
+  context.lineWidth = 4
+  context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16)
   context.fillStyle = '#526166'
   context.font = '12px Arial'
   context.fillText(`Gerado em ${new Date().toLocaleString('pt-BR')}`, contentX, 1070)

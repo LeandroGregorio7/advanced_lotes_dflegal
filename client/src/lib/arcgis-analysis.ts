@@ -172,8 +172,18 @@ const buildDimensionGraphics = (polygon: Polygon, viewResolution: number) => {
     const length = geometryEngine.geodesicLength(segment, 'meters') || 0
     if (length < 0.01) continue
 
-    const label = `L${String(index + 1).padStart(2, '0')}`
-    const text = `${length.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
+    const lengths = vertices.map((vertex, vertexIndex) => {
+      const next = vertices[(vertexIndex + 1) % vertices.length]
+      return Math.hypot(next[0] - vertex[0], next[1] - vertex[1])
+    }).filter((value) => value > 0)
+    const sortedLengths = [...lengths].sort((a, b) => a - b)
+    const medianLength = sortedLengths[Math.floor(sortedLengths.length / 2)] || length
+    const firstIsLength = (lengths[0] || length) >= (lengths[1] || length)
+    const isLength = vertices.length === 4
+      ? (index % 2 === 0 ? firstIsLength : !firstIsLength)
+      : length >= medianLength
+    const label = isLength ? 'Comprimento' : 'Largura'
+    const text = `${label}: ${length.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
     const dx = end[0] - start[0]
     const dy = end[1] - start[1]
     const planarLength = Math.hypot(dx, dy)
