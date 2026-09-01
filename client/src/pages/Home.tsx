@@ -261,7 +261,7 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   context.fillRect(contentX, y, contentWidth, 2)
   y += 28
   context.fillStyle = '#173C46'
-  context.font = '700 19px Arial'
+  context.font = '700 14px Arial'
   context.fillText('DADOS DO LOTE REGISTRADO E OCUPAÇÃO IDENTIFICADA', contentX, y)
   y += 28
   const lotFields = ['pu_ciu', 'pu_projeto', 'pu_end_car', 'pu_end_usu', 'x', 'y', 'pn_norma', 'pn_uso', 'pn_norma_a']
