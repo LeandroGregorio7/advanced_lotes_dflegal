@@ -20,8 +20,22 @@ import TextSymbol from '@arcgis/core/symbols/TextSymbol'
 import PrintTemplate from '@arcgis/core/rest/support/PrintTemplate'
 import PrintParameters from '@arcgis/core/rest/support/PrintParameters'
 import * as print from '@arcgis/core/rest/print'
+import OAuthInfo from '@arcgis/core/identity/OAuthInfo'
+import esriId from '@arcgis/core/identity/IdentityManager'
 
 export type FeatureKind = 'lote' | 'ocupacao'
+
+export async function ensurePortalCredential(portalUrl: string, clientId: string) {
+  const cleanPortalUrl = portalUrl.replace(/\/$/, '')
+  const oauthInfo = new OAuthInfo({
+    appId: clientId,
+    portalUrl: cleanPortalUrl,
+    flowType: 'authorization-code',
+    popup: false,
+  })
+  esriId.registerOAuthInfos([oauthInfo])
+  return esriId.getCredential(`${cleanPortalUrl}/sharing`, { oAuthPopupConfirmation: false })
+}
 
 export interface AppMapSettings {
   portalUrl: string

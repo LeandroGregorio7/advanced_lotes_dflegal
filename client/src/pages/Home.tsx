@@ -28,11 +28,13 @@ import {
   PublicAreaResult,
   SelectedFeature,
   createAnalysisRuntime,
+  ensurePortalCredential,
 } from '@/lib/arcgis-analysis'
 
 const portalDefault = 'https://monitora.dflegal.df.gov.br/portal'
 const printDefault = 'https://monitora.dflegal.df.gov.br/server/rest/services/DF_Legal_Printer_Service_V5/GPServer/Export%20Web%20Map'
 const storageKey = 'advanced-lotes-dflegal-settings-v2'
+const oauthClientId = 'jfk16YwsZbW4Cp98'
 
 const defaultSettings: AppMapSettings = {
   portalUrl: portalDefault,
@@ -371,6 +373,8 @@ export default function Home() {
     runtimeRef.current = null
 
     try {
+      await ensurePortalCredential(settings.portalUrl, oauthClientId)
+      setStatus('Login confirmado. Carregando o Web Map e as camadas protegidas…')
       const runtime = await createAnalysisRuntime(mapHostRef.current, settings, (nextSelection) => {
         setSelection(nextSelection)
         if (nextSelection.kind === 'lote') setLotSelection(nextSelection)
@@ -700,7 +704,7 @@ export default function Home() {
               <label className="full-width"><span>Tarefa Export Web Map</span><Input value={settings.printServiceUrl} onChange={(event) => updateSetting('printServiceUrl', event.target.value)} /></label>
               <label className="full-width"><span>Nome do layout de impressão</span><Input value={settings.layoutName} onChange={(event) => updateSetting('layoutName', event.target.value)} /></label>
             </div>
-            <div className="drawer-footer"><p>Não informe senha, token ou chave em nenhum campo.</p><Button onClick={loadMap} disabled={isLoadingMap}>{isLoadingMap ? <LoaderCircle className="animate-spin" size={17} /> : <MapPinned size={17} />}{isLoadingMap ? 'Carregando…' : 'Carregar Web Map'}</Button></div>
+            <div className="drawer-footer"><p>Não informe senha, token ou chave em nenhum campo.</p><Button onClick={loadMap} disabled={isLoadingMap}>{isLoadingMap ? <LoaderCircle className="animate-spin" size={17} /> : <MapPinned size={17} />}{isLoadingMap ? 'Autenticando e carregando…' : 'Entrar e carregar Web Map'}</Button></div>
           </section>
         </div>
       )}
