@@ -93,7 +93,7 @@ export interface AnalysisRuntime {
   setSelectionMode: (mode: FeatureKind) => void
   searchFeatures: (mode: FeatureKind, searchText: string) => Promise<SelectedFeature[]>
   selectFeature: (selection: SelectedFeature, zoomToFeature?: boolean) => Promise<void>
-  drawDimensions: (lote: SelectedFeature) => DimensionItem[]
+  drawDimensions: (lotes: SelectedFeature[]) => DimensionItem[]
   analysePublicArea: (ocupacao: SelectedFeature, preferredLots?: SelectedFeature[]) => Promise<PublicAreaResult>
   drawManualPublicArea: () => Promise<ManualPublicAreaResult>
   clearGraphics: () => void
@@ -416,12 +416,16 @@ export async function createAnalysisRuntime(
     },
     searchFeatures,
     selectFeature,
-    drawDimensions: (lote) => {
-      const polygon = ensurePolygon(lote.graphic, 'O lote selecionado')
+    drawDimensions: (lotes) => {
       dimensionLayer.removeAll()
-      const { graphics, dimensions } = buildDimensionGraphics(polygon, view.resolution)
-      dimensionLayer.addMany(graphics)
-      return dimensions
+      const allDimensions: DimensionItem[] = []
+      lotes.forEach((lote, lotIndex) => {
+        const polygon = ensurePolygon(lote.graphic, `O lote ${lotIndex + 1}`)
+        const { graphics, dimensions } = buildDimensionGraphics(polygon, view.resolution)
+        dimensionLayer.addMany(graphics)
+        allDimensions.push(...dimensions.map((item) => ({ ...item, label: `${lote.title} · ${item.label}` })))
+      })
+      return allDimensions
     },
     analysePublicArea: async (occupation, preferredLots = []) => {
       const lot = await getLargestIntersectingLot(occupation, lotLayer, settings, preferredLots)
@@ -466,6 +470,15 @@ export async function createAnalysisRuntime(
               reportedExcess: numericalExcess,
               geometricArea: geometricPublicArea,
             },
+          }),
+          new Graphic({
+            geometry: (hachGeometry as Polygon).centroid || (occupationPolygon as Polygon).centroid,
+            symbol: new TextSymbol({
+              text: `${occupation.title} · ${geometricPublicArea.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m²`,
+              color: '#8A211F', haloColor: '#FFFDF6', haloSize: 2.5,
+              font: { family: 'Source Sans 3', size: 10, weight: 'bold' },
+            }),
+            attributes: { analysisType: 'public-area-label', geometricArea: geometricPublicArea },
           }),
         ])
       }

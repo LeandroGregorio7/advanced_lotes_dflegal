@@ -102,7 +102,35 @@ const drawAttributeBlock = (context: CanvasRenderingContext2D, title: string, fi
   return currentY + 10
 }
 
-const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg', dimensions: DimensionItem[], publicAreas: PublicAreaResult[], manualArea: ManualPublicAreaResult | null, lotSelection: SelectedFeature | null, occupationSelection: SelectedFeature | null) => {
+const downloadPdfFromJpeg = async (jpegDataUrl: string, filename: string) => {
+  const response = await fetch(jpegDataUrl)
+  const jpegBytes = new Uint8Array(await response.arrayBuffer())
+  const encoder = new TextEncoder()
+  const chunks: Uint8Array[] = []
+  const offsets: number[] = [0]
+  let position = 0
+  const addText = (text: string) => { const bytes = encoder.encode(text); chunks.push(bytes); position += bytes.length }
+  const addBytes = (bytes: Uint8Array) => { chunks.push(bytes); position += bytes.length }
+  addText('%PDF-1.4\n%âãÏÓ\n')
+  const object = (number: number, body: string) => { offsets[number] = position; addText(`${number} 0 obj\n${body}\nendobj\n`) }
+  object(1, '<< /Type /Catalog /Pages 2 0 R >>')
+  object(2, '<< /Type /Pages /Kids [4 0 R] /Count 1 >>')
+  offsets[3] = position
+  addText(`3 0 obj\n<< /Type /XObject /Subtype /Image /Width 2000 /Height 1200 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`)
+  addBytes(jpegBytes); addText('\nendstream\nendobj\n')
+  object(4, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1200 720] /Resources << /XObject << /Im0 3 0 R >> >> /Contents 5 0 R >>')
+  const content = 'q\n1200 0 0 720 0 0 cm\n/Im0 Do\nQ\n'
+  object(5, `<< /Length ${encoder.encode(content).length} >>\nstream\n${content}endstream`)
+  const xref = position
+  addText(`xref\n0 6\n0000000000 65535 f \n`)
+  for (let index = 1; index <= 5; index += 1) addText(`${String(offsets[index]).padStart(10, '0')} 00000 n \n`)
+  addText(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`)
+  const blob = new Blob(chunks as unknown as BlobPart[], { type: 'application/pdf' })
+  const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click()
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+}
+
+const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg', dimensions: DimensionItem[], publicAreas: PublicAreaResult[], manualArea: ManualPublicAreaResult | null, lotSelections: SelectedFeature[], occupationSelections: SelectedFeature[]) => {
   const image = await loadImage(capture.dataUrl)
   const canvas = document.createElement('canvas')
   canvas.width = 2000
@@ -112,10 +140,10 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
 
   context.fillStyle = '#F4F0E8'
   context.fillRect(0, 0, canvas.width, canvas.height)
-  const mapX = 112
-  const mapWidth = 1280
+  const mapX = 78
+  const mapWidth = 1190
   const mapHeight = Math.round(mapWidth / (image.width / image.height))
-  const mapY = 220
+  const mapY = 178
   context.fillStyle = '#FFFFFF'
   context.fillRect(mapX - 8, mapY - 28, mapWidth + 16, mapHeight + 56)
   context.drawImage(image, mapX, mapY, mapWidth, mapHeight)
@@ -156,8 +184,8 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   context.lineWidth = 3
   context.strokeRect(mapX, mapY, mapWidth, mapHeight)
 
-  const panelX = 1430
-  const panelWidth = 570
+  const panelX = 1310
+  const panelWidth = 674
   context.fillStyle = '#FFFFFF'
   context.fillRect(panelX, 0, panelWidth, canvas.height)
   context.fillStyle = '#0B3440'
@@ -172,7 +200,7 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   }
   context.fillStyle = '#FFFFFF'
   context.font = '700 17px Arial'
-  drawWrappedText(context, 'Mapa Temático Consulta Lote registrado e área pública ocupada', panelX + 220, 42, 320, 22)
+  drawWrappedText(context, 'Mapa Temático Consulta Lote registrado e área pública ocupada', panelX + 220, 38, 420, 22)
   context.font = '14px Arial'
   context.fillText('Advanced Lotes · DF Legal', panelX + 220, 96)
   context.fillStyle = '#526166'
@@ -187,127 +215,65 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   let y = 232
   const contentX = panelX + 24
   const contentWidth = panelWidth - 48
-  context.fillStyle = '#173C46'
-  context.font = '700 19px Arial'
-  context.fillText('IDENTIFICAÇÃO DO LOTE REGISTRADO', contentX, y)
-  y += 30
-  context.font = '14px Arial'
-  y = drawWrappedText(context, lotSelection?.graphic.attributes?.pu_end_car || lotSelection?.graphic.attributes?.end_car || lotSelection?.address || 'Endereço não informado', contentX, y, contentWidth, 20)
-  y += 4
-  context.fillText(`CIU ${lotSelection?.graphic.attributes?.pu_ciu || lotSelection?.graphic.attributes?.ciu || 'não informado'}`, contentX, y)
-  y += 24
-  context.fillStyle = '#C58A28'
-  context.fillRect(contentX, y, contentWidth, 2)
-  y += 32
+  const totalOccupation = publicAreas.reduce((sum, item) => sum + item.reportedOccupationArea, 0)
+  const totalLot = publicAreas.reduce((sum, item) => sum + item.reportedLotArea, 0)
+  const totalExcess = publicAreas.reduce((sum, item) => sum + item.numericalExcess, 0)
+  const totalGeometric = publicAreas.reduce((sum, item) => sum + item.geometricPublicArea, 0) + (manualArea?.area || 0)
 
-  context.fillStyle = '#173C46'
-  context.font = '700 19px Arial'
-  context.fillText('COTAS DOS SEGMENTOS', contentX, y)
-  y += 30
-  context.font = '14px Arial'
-  if (dimensions.length) {
-    for (const dimension of dimensions) {
-      context.fillStyle = '#526166'
-      context.fillText(dimension.label, contentX, y)
-      context.fillStyle = '#173C46'
-      context.font = '700 14px Arial'
-      context.fillText(formatMeters(dimension.length), contentX + 166, y)
-      context.font = '14px Arial'
-      y += 24
-    }
-  } else {
-    context.fillStyle = '#526166'
-    context.fillText('Nenhuma cota gerada.', contentX, y)
-    y += 24
-  }
-  y += 18
-  context.fillStyle = '#B93835'
-  context.fillRect(contentX, y, contentWidth, 2)
-  y += 32
+  context.fillStyle = '#173C46'; context.font = '700 17px Arial'
+  context.fillText(`SELEÇÕES · ${lotSelections.length} LOTE(S) · ${occupationSelections.length} OCUPAÇÃO(ÕES)`, contentX, y); y += 28
+  context.fillStyle = '#526166'; context.font = '11px Arial'
+  for (const item of lotSelections) { y = drawWrappedText(context, `Lote: ${item.title} · ${item.address || 'endereço não informado'} · área ${formatSquareMeters(item.reportedArea)}`, contentX, y, contentWidth, 15) }
+  for (const item of occupationSelections) { y = drawWrappedText(context, `Ocupação: ${item.title} · ${item.address || 'endereço não informado'} · área ${formatSquareMeters(item.reportedArea)}`, contentX, y, contentWidth, 15) }
+  y += 8; context.fillStyle = '#C58A28'; context.fillRect(contentX, y, contentWidth, 2); y += 24
 
-  context.fillStyle = '#B93835'
-  context.font = '700 19px Arial'
-  context.fillText('ÁREA PÚBLICA', contentX, y)
-  y += 30
-  context.fillStyle = '#173C46'
-  context.font = '14px Arial'
-  if (publicAreas.length || manualArea) {
-    const totalOccupation = publicAreas.reduce((sum, item) => sum + item.reportedOccupationArea, 0)
-    const totalLot = publicAreas.reduce((sum, item) => sum + item.reportedLotArea, 0)
-    const totalExcess = publicAreas.reduce((sum, item) => sum + item.numericalExcess, 0)
-    const totalGeometric = publicAreas.reduce((sum, item) => sum + item.geometricPublicArea, 0) + (manualArea?.area || 0)
-    const areaRows = [
-      ['Ocupações', `${publicAreas.length}`],
-      ['Área ocupada', formatSquareMeters(totalOccupation)],
-      ['Área dos lotes', formatSquareMeters(totalLot)],
-      ['Excedente declarado', formatSquareMeters(totalExcess)],
-      ['Área pública', formatSquareMeters(totalGeometric)],
-    ]
-    for (const [label, value] of areaRows) {
-      context.fillStyle = '#526166'
-      context.fillText(label, contentX, y)
-      context.fillStyle = '#173C46'
-      context.font = '700 14px Arial'
-      context.fillText(value, contentX + 125, y)
-      context.font = '14px Arial'
-      y += 25
-    }
-    y += 12
-    context.fillStyle = totalGeometric > 0 ? '#B93835' : '#526166'
-    context.font = '700 14px Arial'
-    y = drawWrappedText(context, totalGeometric > 0 ? `Área pública ocupada identificada: ${formatSquareMeters(totalGeometric)}.` : 'Não há área pública ocupada identificada.', contentX, y, contentWidth, 20)
-    context.fillStyle = '#526166'
-    context.font = '12px Arial'
-    y = drawWrappedText(context, 'O cálculo automático combina as áreas da tabela de atributos com a diferença geométrica. O desenho manual é uma operação independente e também é incluído.', contentX, y + 2, contentWidth, 17)
-  } else {
-    context.fillStyle = '#526166'
-    context.fillText('Análise não executada.', contentX, y)
-    y += 24
-  }
+  context.fillStyle = '#173C46'; context.font = '700 17px Arial'; context.fillText('COTAS DOS SEGMENTOS · TODOS OS LOTES', contentX, y); y += 25
+  context.fillStyle = '#526166'; context.font = '11px Arial'
+  if (dimensions.length) for (const dimension of dimensions) { context.fillText(dimension.label, contentX, y); context.fillStyle = '#173C46'; context.font = '700 11px Arial'; context.fillText(formatMeters(dimension.length), contentX + Math.min(490, contentWidth - 90), y); context.fillStyle = '#526166'; context.font = '11px Arial'; y += 16 }
+  else { context.fillText('Nenhuma cota gerada.', contentX, y); y += 18 }
+  y += 8; context.fillStyle = '#B93835'; context.fillRect(contentX, y, contentWidth, 2); y += 24
 
-  y = Math.max(y + 22, 640)
-  context.fillStyle = '#C58A28'
-  context.fillRect(contentX, y, contentWidth, 2)
-  y += 28
-  context.fillStyle = '#173C46'
-  context.font = '700 14px Arial'
-  context.fillText('DADOS DO LOTE REGISTRADO E OCUPAÇÃO IDENTIFICADA', contentX, y)
-  y += 28
+  context.fillStyle = '#B93835'; context.font = '700 17px Arial'; context.fillText('ÁREA PÚBLICA · POR ITEM E CONSOLIDADO', contentX, y); y += 24
+  context.fillStyle = '#526166'; context.font = '11px Arial'
+  const summary = [`Ocupações: ${publicAreas.length}`, `Área ocupada: ${formatSquareMeters(totalOccupation)}`, `Área dos lotes: ${formatSquareMeters(totalLot)}`, `Excedente da tabela: ${formatSquareMeters(totalExcess)}`, `Área pública total: ${formatSquareMeters(totalGeometric)}`]
+  y = drawWrappedText(context, summary.join('  ·  '), contentX, y, contentWidth, 15)
+  for (const item of publicAreas) { y = drawWrappedText(context, `${item.occupation.title} → ${item.lot.title}: ${formatSquareMeters(item.geometricPublicArea)} geométrica · ${formatSquareMeters(item.numericalExcess)} tabela`, contentX, y, contentWidth, 15) }
+  if (manualArea) y = drawWrappedText(context, `Desenho manual (calçada/avanço): ${formatSquareMeters(manualArea.area)}`, contentX, y, contentWidth, 15)
+  y += 8; context.fillStyle = '#C58A28'; context.fillRect(contentX, y, contentWidth, 2); y += 22
+
+  context.fillStyle = '#173C46'; context.font = '700 14px Arial'; context.fillText('ATRIBUTOS DE TODOS OS LOTES E OCUPAÇÕES', contentX, y); y += 22
   const lotFields = ['pu_ciu', 'pu_projeto', 'pu_end_car', 'pu_end_usu', 'x', 'y', 'pn_norma', 'pn_uso', 'pn_norma_a']
   const occupationFields = ['ct_ciu', 'ct_origem', 'lt_enderec', 'lt_ra', 'st_area_sh']
-  drawAttributeBlock(context, 'LOTE REGISTRADO', lotFields, lotSelection, contentX, y, 250)
-  context.strokeStyle = '#9AA2A4'
-  context.lineWidth = 2
-  context.beginPath(); context.moveTo(contentX + 270, y - 14); context.lineTo(contentX + 270, 920); context.stroke()
-  drawAttributeBlock(context, 'OCUPAÇÃO IDENTIFICADA', occupationFields, occupationSelection, contentX + 295, y, 240)
+  const drawFeatureRows = (title: string, items: SelectedFeature[], fields: string[], x: number, width: number) => {
+    let currentY = y
+    context.fillStyle = '#173C46'; context.font = '700 11px Arial'; context.fillText(title, x, currentY); currentY += 16
+    for (let index = 0; index < items.length; index += 1) {
+      const feature = items[index]
+      context.fillStyle = '#B93835'; context.font = '700 9px Arial'; context.fillText(`${index + 1}. ${feature.title}`, x, currentY); currentY += 12
+      context.fillStyle = '#526166'; context.font = '9px Arial'
+      const displayFields = Object.keys(feature.graphic.attributes || {})
+      for (const field of displayFields) {
+        const raw = feature.graphic.attributes?.[field]
+        if (raw === undefined || raw === null || String(raw).trim() === '') continue
+        currentY = drawWrappedText(context, `${field}: ${String(raw)}`, x, currentY, width, 11)
+        if (currentY > 1000) break
+      }
+      currentY += 4
+    }
+    return currentY
+  }
+  const leftY = drawFeatureRows('LOTES REGISTRADOS', lotSelections, lotFields, contentX, 300)
+  const rightY = drawFeatureRows('OCUPAÇÕES IDENTIFICADAS', occupationSelections, occupationFields, contentX + 330, 295)
+  y = Math.max(leftY, rightY, 900)
 
-  const legendY = 1018
-  context.fillStyle = '#C58A28'
-  context.fillRect(contentX, legendY, contentWidth, 2)
-  context.fillStyle = '#173C46'
-  context.font = '700 16px Arial'
-  context.fillText('LEGENDA', contentX, legendY + 26)
-  context.font = '13px Arial'
-  context.fillStyle = '#E5D95A'
-  context.fillRect(contentX, legendY + 40, 20, 14)
-  context.fillStyle = '#173C46'
-  context.font = '700 13px Arial'
-  context.fillText('Lotes Registrados', contentX + 30, legendY + 52)
-  context.fillStyle = '#F35B87'
-  context.fillRect(contentX, legendY + 62, 20, 14)
-  context.fillStyle = '#173C46'
-  context.fillText('Ocupações Identificadas', contentX + 30, legendY + 74)
-  context.strokeStyle = '#FFE46E'
-  context.strokeRect(contentX + 260, legendY + 40, 20, 14)
-  context.fillStyle = '#B93835'
-  context.font = '700 13px Arial'
-  context.fillText('Área pública ocupada (hachura)', contentX + 290, legendY + 52)
-  context.strokeStyle = '#4E5B60'
-  context.lineWidth = 4
-  context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16)
-  context.fillStyle = '#526166'
-  context.font = '12px Arial'
-  context.fillText(`Gerado em ${new Date().toLocaleString('pt-BR')}`, contentX, 1168)
+  const legendY = Math.min(1065, y + 18)
+  context.fillStyle = '#C58A28'; context.fillRect(contentX, legendY, contentWidth, 2)
+  context.fillStyle = '#173C46'; context.font = '700 14px Arial'; context.fillText('LEGENDA', contentX, legendY + 23)
+  context.font = '11px Arial'; context.fillStyle = '#E5D95A'; context.fillRect(contentX, legendY + 34, 18, 12); context.fillStyle = '#173C46'; context.fillText('Lotes Registrados', contentX + 26, legendY + 46)
+  context.fillStyle = '#F35B87'; context.fillRect(contentX + 170, legendY + 34, 18, 12); context.fillStyle = '#173C46'; context.fillText('Ocupações Identificadas', contentX + 196, legendY + 46)
+  context.strokeStyle = '#FFE46E'; context.strokeRect(contentX + 390, legendY + 34, 18, 12); context.fillStyle = '#B93835'; context.fillText('Área pública automática/manual', contentX + 416, legendY + 46)
+  context.strokeStyle = '#4E5B60'; context.lineWidth = 4; context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16)
+  context.fillStyle = '#526166'; context.font = '10px Arial'; context.fillText(`Gerado em ${new Date().toLocaleString('pt-BR')}`, contentX, 1170)
   const mime = format === 'jpg' ? 'image/jpeg' : 'image/png'
   return canvas.toDataURL(mime, format === 'jpg' ? 0.94 : undefined)
 }
@@ -454,9 +420,9 @@ export default function Home() {
     }
     try {
       setError('')
-      const nextDimensions = runtimeRef.current.drawDimensions(lotSelection || lotSelections[0])
+      const nextDimensions = runtimeRef.current.drawDimensions(lotSelections.length ? lotSelections : [lotSelection!])
       setDimensions(nextDimensions)
-      setStatus(`${nextDimensions.length} segmentos cotados no lote selecionado.`)
+      setStatus(`${nextDimensions.length} segmentos cotados em ${lotSelections.length || 1} lote(s).`)
     } catch (dimensionError) {
       setError(dimensionError instanceof Error ? dimensionError.message : 'Não foi possível gerar as cotas.')
     }
@@ -503,7 +469,7 @@ export default function Home() {
       setExportingImage(true)
       setStatus(`Gerando imagem ${format.toUpperCase()} da área atual do mapa…`)
       const capture = await runtimeRef.current.exportMapImage(format)
-      const dataUrl = await composeLandscapeBoard(capture, format, dimensions, publicAreas, manualPublicArea, lotSelection, occupationSelection)
+      const dataUrl = await composeLandscapeBoard(capture, format, dimensions, publicAreas, manualPublicArea, lotSelections, occupationSelections)
       const link = document.createElement('a')
       link.href = dataUrl
       link.download = `advanced-lotes-df-legal-${new Date().toISOString().slice(0, 10)}.${format}`
@@ -527,35 +493,18 @@ export default function Home() {
     setError('')
   }
 
-  const printAnalysis = async () => {
+  const downloadPdf = async () => {
     if (!runtimeRef.current) return
     try {
-      setError('')
-      setPrinting(true)
-      setStatus('Enviando mapa, cotas e hachura para o PDF… A RA é ocultada somente durante a impressão para contornar o erro do GPServer.')
-      const analysisText = publicAreas.length || manualPublicArea
-        ? [
-            `Itens analisados: ${publicAreas.length}`,
-            `Área ocupada consolidada: ${formatSquareMeters(publicAreas.reduce((sum, item) => sum + item.reportedOccupationArea, 0))}`,
-            `Área dos lotes consolidada: ${formatSquareMeters(publicAreas.reduce((sum, item) => sum + item.reportedLotArea, 0))}`,
-            `Área pública geométrica consolidada: ${formatSquareMeters(publicAreas.reduce((sum, item) => sum + item.geometricPublicArea, 0) + (manualPublicArea?.area || 0))}`,
-            manualPublicArea ? `Área pública desenhada manualmente: ${formatSquareMeters(manualPublicArea.area)}` : '',
-          ].filter(Boolean).join('\n')
-        : 'Nenhuma análise de área pública executada.'
-      const selectionText = [
-        `Lotes selecionados (${lotSelections.length}): ${lotSelections.map((item) => `${item.title} — ${formatSquareMeters(item.reportedArea)}`).join('; ') || 'nenhum'}`,
-        `Ocupações selecionadas (${occupationSelections.length}): ${occupationSelections.map((item) => `${item.title} — ${formatSquareMeters(item.reportedArea)}`).join('; ') || 'nenhuma'}`,
-      ].join('\n\n')
-      const fileUrl = await runtimeRef.current.printAnalysis(settings, 'Análise de Lote — DF Legal', analysisText, selectionText)
-      window.open(fileUrl, '_blank', 'noopener,noreferrer')
-      setStatus('PDF gerado. A nova aba contém o arquivo devolvido pelo serviço.')
-    } catch (printError) {
-      const message = printError instanceof Error ? printError.message : 'O serviço não retornou o PDF.'
-      setError(message)
-      setStatus('Falha na impressão. O serviço V5 não devolveu o PDF; confira a URL da tarefa e o log do GPServer.')
-    } finally {
-      setPrinting(false)
-    }
+      setError(''); setPrinting(true); setStatus('Gerando PDF direto no navegador…')
+      const capture = await runtimeRef.current.exportMapImage('jpg')
+      const boardDataUrl = await composeLandscapeBoard(capture, 'jpg', dimensions, publicAreas, manualPublicArea, lotSelections, occupationSelections)
+      await downloadPdfFromJpeg(boardDataUrl, `advanced-lotes-df-legal-${new Date().toISOString().slice(0, 10)}.pdf`)
+      setStatus('PDF baixado diretamente, sem usar o serviço de impressão.')
+    } catch (pdfError) {
+      setError(pdfError instanceof Error ? pdfError.message : 'Não foi possível gerar o PDF direto.')
+      setStatus('Falha ao gerar o PDF direto.')
+    } finally { setPrinting(false) }
   }
 
   const mapIsLoaded = Boolean(runtimeRef.current)
@@ -620,11 +569,11 @@ export default function Home() {
                 </div>
               )}
             </div>
-            <Button onClick={drawDimensions} disabled={!mapIsLoaded || !selectionIsLot} className="tool-button tool-button-dimension">
+            <Button onClick={drawDimensions} disabled={!mapIsLoaded || !(lotSelections.length || lotSelection)} className="tool-button tool-button-dimension">
               <Ruler size={18} strokeWidth={1.8} />
               <span><strong>Cotar segmentos</strong><small>Desenha cada medida do lote</small></span>
             </Button>
-            <Button onClick={analysePublicArea} disabled={!mapIsLoaded || !selectionIsOccupation} className="tool-button tool-button-alert">
+            <Button onClick={analysePublicArea} disabled={!mapIsLoaded || !(occupationSelections.length || occupationSelection)} className="tool-button tool-button-alert">
               <AlertTriangle size={18} strokeWidth={1.8} />
               <span><strong>Calcular área pública automática</strong><small>Usa tabela de atributos + diferença geométrica</small></span>
             </Button>
@@ -640,11 +589,11 @@ export default function Home() {
 
           <section className="tool-cluster print-cluster">
             <p className="section-label">SAÍDA CARTOGRÁFICA</p>
-            <Button onClick={printAnalysis} disabled={!mapIsLoaded || isPrinting} className="print-button">
+            <Button onClick={() => void downloadPdf()} disabled={!mapIsLoaded || isPrinting} className="print-button">
               {isPrinting ? <LoaderCircle className="animate-spin" size={18} /> : <FileDown size={18} />}
               {isPrinting ? 'Gerando PDF…' : 'Baixar PDF do mapa analisado'}
             </Button>
-            <p className="print-hint">O PDF usa o Export Web Map; a RA é ocultada somente durante a chamada. PNG/JPG são alternativas diretas da área atual do mapa.</p>
+            <p className="print-hint">PDF, PNG e JPG são gerados e baixados diretamente no navegador, com todas as seleções, cotas, áreas e atributos.</p>
             <div className="image-export-actions">
               <Button onClick={() => void exportMapImage('png')} disabled={!mapIsLoaded || isPrinting || isExportingImage} variant="outline" className="image-export-button">
                 <ImageDown size={16} /> {isExportingImage ? 'Gerando…' : 'Baixar PNG'}
@@ -681,7 +630,7 @@ export default function Home() {
               <div className="operational-readout" aria-label="Estado da conexão">
                 <div><span>CAMADA-ALVO A</span><strong>Lotes Registrados</strong></div>
                 <div><span>CAMADA-ALVO B</span><strong>Ocupacoes Identificadas</strong></div>
-                <div><span>SAÍDA</span><strong>Export Web Map · PDF</strong></div>
+                <div><span>SAÍDA</span><strong>Download direto · PDF · PNG · JPG</strong></div>
               </div>
               <Button onClick={() => setConfigurationOpen(true)}><Settings2 size={16} /> Configurar conexão</Button>
             </div>
@@ -748,8 +697,6 @@ export default function Home() {
               <label><span>Campo da área do lote</span><Input value={settings.lotAreaField} onChange={(event) => updateSetting('lotAreaField', event.target.value)} /></label>
               <label><span>Camada de ocupações</span><Input value={settings.occupationLayerTitle} onChange={(event) => updateSetting('occupationLayerTitle', event.target.value)} /></label>
               <label><span>Campo da área construída</span><Input value={settings.occupationAreaField} onChange={(event) => updateSetting('occupationAreaField', event.target.value)} /></label>
-              <label className="full-width"><span>Tarefa Export Web Map</span><Input value={settings.printServiceUrl} onChange={(event) => updateSetting('printServiceUrl', event.target.value)} /></label>
-              <label className="full-width"><span>Nome do layout de impressão</span><Input value={settings.layoutName} onChange={(event) => updateSetting('layoutName', event.target.value)} /></label>
             </div>
             <div className="drawer-footer"><p>Não informe senha, token ou chave em nenhum campo.</p><Button onClick={loadMap} disabled={isLoadingMap}>{isLoadingMap ? <LoaderCircle className="animate-spin" size={17} /> : <MapPinned size={17} />}{isLoadingMap ? 'Autenticando e carregando…' : 'Entrar e carregar Web Map'}</Button></div>
           </section>
