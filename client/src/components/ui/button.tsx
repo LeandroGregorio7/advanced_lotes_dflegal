@@ -2,11 +2,11 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 
 type ButtonProps = React.ComponentProps<'button'> & {
-  variant?: 'default' | 'ghost'
+  variant?: 'default' | 'ghost' | 'outline'
 }
 
 function Button({ className, variant = 'default', type = 'button', ...props }: ButtonProps) {
-  return <button type={type} className={cn('inline-flex items-center justify-center', variant === 'ghost' && 'bg-transparent', className)} {...props} />
+  return <button type={type} className={cn('inline-flex items-center justify-center', variant === 'ghost' && 'bg-transparent', variant === 'outline' && 'border border-white/30 bg-transparent', className)} {...props} />
 }
 
 export { Button }

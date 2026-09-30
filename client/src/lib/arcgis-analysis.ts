@@ -16,6 +16,7 @@ import * as webMercatorUtils from '@arcgis/core/geometry/support/webMercatorUtil
 import SimpleFillSymbol from '@arcgis/core/symbols/SimpleFillSymbol'
 import SimpleLineSymbol from '@arcgis/core/symbols/SimpleLineSymbol'
 import SimpleMarkerSymbol from '@arcgis/core/symbols/SimpleMarkerSymbol'
+import SketchViewModel from '@arcgis/core/widgets/Sketch/SketchViewModel'
 import TextSymbol from '@arcgis/core/symbols/TextSymbol'
 import PrintTemplate from '@arcgis/core/rest/support/PrintTemplate'
 import PrintParameters from '@arcgis/core/rest/support/PrintParameters'
@@ -81,6 +82,11 @@ export interface PublicAreaResult {
   note: string
 }
 
+export interface ManualPublicAreaResult {
+  area: number
+  geometry: __esri.Geometry
+}
+
 export interface AnalysisRuntime {
   view: MapView
   layerTitles: string[]
@@ -88,7 +94,8 @@ export interface AnalysisRuntime {
   searchFeatures: (mode: FeatureKind, searchText: string) => Promise<SelectedFeature[]>
   selectFeature: (selection: SelectedFeature, zoomToFeature?: boolean) => Promise<void>
   drawDimensions: (lote: SelectedFeature) => DimensionItem[]
-  analysePublicArea: (ocupacao: SelectedFeature) => Promise<PublicAreaResult>
+  analysePublicArea: (ocupacao: SelectedFeature, preferredLots?: SelectedFeature[]) => Promise<PublicAreaResult>
+  drawManualPublicArea: () => Promise<ManualPublicAreaResult>
   clearGraphics: () => void
   printAnalysis: (settings: AppMapSettings, title: string, analysisText: string, selectionText: string) => Promise<string>
   exportMapImage: (format: 'png' | 'jpg') => Promise<MapCapture>
@@ -265,8 +272,17 @@ const buildDimensionGraphics = (polygon: Polygon, viewResolution: number) => {
   return { graphics, dimensions }
 }
 
-const getLargestIntersectingLot = async (occupation: SelectedFeature, lotLayer: FeatureLayer, settings: AppMapSettings) => {
+const getLargestIntersectingLot = async (occupation: SelectedFeature, lotLayer: FeatureLayer, settings: AppMapSettings, preferredLots: SelectedFeature[] = []) => {
   const occupationGeometry = ensurePolygon(occupation.graphic, 'A ocupação selecionada')
+  const preferredCandidates = preferredLots.filter((candidate) => candidate.kind === 'lote' && candidate.graphic.geometry)
+  if (preferredCandidates.length) {
+    const preferredMatch = preferredCandidates
+      .map((candidate) => ({ candidate, area: geodesicArea(geometryEngine.intersect(occupationGeometry, candidate.graphic.geometry!)) }))
+      .filter((item) => item.area > 0)
+      .sort((a, b) => b.area - a.area)[0]
+    if (preferredMatch) return preferredMatch.candidate
+  }
+
   const query = lotLayer.createQuery()
   query.geometry = occupationGeometry
   query.spatialRelationship = 'intersects'
@@ -310,7 +326,9 @@ export async function createAnalysisRuntime(
   const hatchLayer = new GraphicsLayer({ title: 'Análise temporária — área pública', listMode: 'hide' })
   const dimensionLayer = new GraphicsLayer({ title: 'Análise temporária — cotas', listMode: 'hide' })
   const selectionLayer = new GraphicsLayer({ title: 'Análise temporária — seleção', listMode: 'hide' })
-  webmap.addMany([hatchLayer, dimensionLayer, selectionLayer])
+  const manualLayer = new GraphicsLayer({ title: 'Análise temporária — área pública desenhada', listMode: 'hide' })
+  webmap.addMany([hatchLayer, dimensionLayer, selectionLayer, manualLayer])
+  const sketch = new SketchViewModel({ view, layer: manualLayer, polygonSymbol: new SimpleFillSymbol({ style: 'cross', color: [255, 226, 79, 0.9], outline: new SimpleLineSymbol({ color: '#B93835', width: 3 }) }) })
 
   const lotLayer = findFeatureLayer(webmap, settings.lotLayerTitle)
   const occupationLayer = findFeatureLayer(webmap, settings.occupationLayerTitle)
@@ -329,9 +347,10 @@ export async function createAnalysisRuntime(
   lotLayer.opacity = 0.82
 
   const selectFeature = async (selected: SelectedFeature, zoomToFeature = false) => {
+    const selectionKey = `${selected.kind}:${selected.graphic.attributes?.[selected.kind === 'lote' ? lotLayer.objectIdField : occupationLayer.objectIdField] ?? selected.title}`
     selectionLayer.graphics
       .toArray()
-      .filter((graphic) => graphic.attributes?.selectedKind === selected.kind)
+      .filter((graphic) => graphic.attributes?.selectionKey === selectionKey)
       .forEach((graphic) => selectionLayer.remove(graphic))
     const geometry = selected.graphic.geometry
     if (geometry?.type === 'polygon') {
@@ -344,7 +363,7 @@ export async function createAnalysisRuntime(
           color,
           outline: new SimpleLineSymbol({ color: outline, width: 4 }),
         }),
-        attributes: { analysisType: 'selected-feature', selectedKind: selected.kind },
+        attributes: { analysisType: 'selected-feature', selectedKind: selected.kind, selectionKey },
       }))
     }
     onSelection(selected)
@@ -404,8 +423,8 @@ export async function createAnalysisRuntime(
       dimensionLayer.addMany(graphics)
       return dimensions
     },
-    analysePublicArea: async (occupation) => {
-      const lot = await getLargestIntersectingLot(occupation, lotLayer, settings)
+    analysePublicArea: async (occupation, preferredLots = []) => {
+      const lot = await getLargestIntersectingLot(occupation, lotLayer, settings, preferredLots)
       const occupationPolygon = ensurePolygon(occupation.graphic, 'A ocupação selecionada')
       const lotPolygon = ensurePolygon(lot.graphic, 'O lote associado')
       const reportedOccupationArea = reportedOrGeometricArea(occupation.graphic, settings.occupationAreaField)
@@ -414,9 +433,10 @@ export async function createAnalysisRuntime(
       const difference = geometryEngine.difference(occupationPolygon, lotPolygon)
       const hachGeometry = firstGeometry(difference)
       const geometricPublicArea = geodesicArea(difference)
-      const hasPublicArea = numericalExcess > 0 && geometricPublicArea > 0
+      // A diferença geométrica é a fonte de verdade: a área declarada pode ser igual
+      // à do lote mesmo quando a ocupação avança sobre calçada ou outra área pública.
+      const hasPublicArea = geometricPublicArea > 0.5
 
-      hatchLayer.removeAll()
       if (hasPublicArea && hachGeometry) {
         hatchLayer.addMany([
           new Graphic({
@@ -456,13 +476,28 @@ export async function createAnalysisRuntime(
         geometricPublicArea,
         hasPublicArea,
         note: hasPublicArea
-          ? 'A hachura representa a parte geométrica da ocupação fora do lote de maior sobreposição.'
-          : 'Não há hachura: pela regra configurada, a área declarada da ocupação não supera a do lote ou não foi encontrada diferença geométrica.',
+          ? `A hachura representa ${geometricPublicArea.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m² fora do lote, inclusive quando a área declarada é igual à do lote.`
+          : 'Não foi identificada diferença geométrica da ocupação fora do lote.',
       }
     },
+    drawManualPublicArea: () => new Promise((resolve, reject) => {
+      const handle = sketch.on('create', (event) => {
+        if (event.state !== 'complete') return
+        handle.remove()
+        const geometry = event.graphic.geometry
+        const area = geodesicArea(geometry)
+        if (!geometry || geometry.type !== 'polygon' || area <= 0) {
+          reject(new Error('Desenhe um polígono válido para representar a área pública.'))
+          return
+        }
+        resolve({ area, geometry })
+      })
+      sketch.create('polygon')
+    }),
     clearGraphics: () => {
       hatchLayer.removeAll()
       dimensionLayer.removeAll()
+      manualLayer.removeAll()
     },
     exportMapImage: async (format) => {
       const screenshot = await view.takeScreenshot({ format })
@@ -516,6 +551,7 @@ export async function createAnalysisRuntime(
     },
     destroy: () => {
       clickHandle.remove()
+      sketch.destroy()
       view.destroy()
     },
   }

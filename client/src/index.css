@@ -181,3 +181,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid #c58a28; outline-
   .full-width { grid-column: auto; }
   .configuration-drawer { padding: 24px 19px; }
 }
+
+/* Seleção múltipla e área pública desenhada: mantém a linguagem cartográfica do layout. */
+.tool-button-manual { border-color: rgb(255 226 79 / .62); }
+.tool-button-manual svg { color: #ffe25a; }
+.public-area-table { display: grid; gap: 1px; margin-top: 9px; background: #dce2dd; }
+.public-area-table div { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; background: #f8f9f4; color: #5e7372; font-size: 11px; }
+.public-area-table strong { color: #a33230; font-weight: 700; white-space: nowrap; }
+@media (max-width: 760px) { .public-area-table div { font-size: 10px; } }

@@ -1,6 +1,6 @@
 # Advanced Lotes DF Legal
 
-Aplicação cartográfica para análise de lotes no ArcGIS Enterprise 12.0. O Web Map operacional é lido sem alteração; as cotas por segmento e a hachura de área pública são gráficos temporários adicionados apenas durante a sessão.
+Aplicação cartográfica para análise de lotes no ArcGIS Enterprise 12.0. O Web Map operacional é lido sem alteração; as cotas, seleções, hachuras de área pública e desenhos manuais são gráficos temporários adicionados apenas durante a sessão.
 
 ## Funcionalidades
 
@@ -9,8 +9,11 @@ A aplicação está pré-configurada para o Web Map `dfead3998af143298ece2d74712
 | Operação | Resultado no mapa |
 |---|---|
 | **Cotar segmentos** | Calcula e rotula cada lado do lote selecionado em metros. |
-| **Ver área pública** | Calcula a diferença espacial entre ocupação e lote, e destaca em hachura vermelha a área fora do lote. |
-| **Imprimir mapa analisado** | Envia o mapa e os gráficos temporários para a tarefa `Export Web Map`. |
+| **Seleção múltipla** | Acumula lotes e ocupações por clique espacial ou por CIU/endereço e exibe o detalhamento por item e o consolidado. |
+| **Ver área pública** | Calcula a diferença geométrica entre ocupação e lote; funciona mesmo quando as áreas declaradas são iguais e destaca o avanço em hachura. |
+| **Desenhar área pública** | Permite desenhar manualmente calçada, avanço ou outra área pública; o polígono é incluído no mapa e nas exportações. |
+| **Baixar PDF** | Envia o mapa, seleções, hachuras e desenhos temporários para a tarefa `Export Web Map`. |
+| **Baixar PNG/JPG** | Gera pranchas com o mapa e o quadro analítico consolidado. |
 
 ## Executar localmente
 

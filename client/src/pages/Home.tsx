@@ -26,6 +26,7 @@ import {
   DimensionItem,
   FeatureKind,
   PublicAreaResult,
+  ManualPublicAreaResult,
   SelectedFeature,
   createAnalysisRuntime,
   ensurePortalCredential,
@@ -101,7 +102,7 @@ const drawAttributeBlock = (context: CanvasRenderingContext2D, title: string, fi
   return currentY + 10
 }
 
-const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg', dimensions: DimensionItem[], publicArea: PublicAreaResult | null, lotSelection: SelectedFeature | null, occupationSelection: SelectedFeature | null) => {
+const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg', dimensions: DimensionItem[], publicAreas: PublicAreaResult[], manualArea: ManualPublicAreaResult | null, lotSelection: SelectedFeature | null, occupationSelection: SelectedFeature | null) => {
   const image = await loadImage(capture.dataUrl)
   const canvas = document.createElement('canvas')
   canvas.width = 2000
@@ -230,12 +231,17 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   y += 30
   context.fillStyle = '#173C46'
   context.font = '14px Arial'
-  if (publicArea) {
+  if (publicAreas.length || manualArea) {
+    const totalOccupation = publicAreas.reduce((sum, item) => sum + item.reportedOccupationArea, 0)
+    const totalLot = publicAreas.reduce((sum, item) => sum + item.reportedLotArea, 0)
+    const totalExcess = publicAreas.reduce((sum, item) => sum + item.numericalExcess, 0)
+    const totalGeometric = publicAreas.reduce((sum, item) => sum + item.geometricPublicArea, 0) + (manualArea?.area || 0)
     const areaRows = [
-      ['Ocupação', formatSquareMeters(publicArea.reportedOccupationArea)],
-      ['Lote', formatSquareMeters(publicArea.reportedLotArea)],
-      ['Excedente', formatSquareMeters(publicArea.numericalExcess)],
-      ['Hachurado', formatSquareMeters(publicArea.geometricPublicArea)],
+      ['Ocupações', `${publicAreas.length}`],
+      ['Área ocupada', formatSquareMeters(totalOccupation)],
+      ['Área dos lotes', formatSquareMeters(totalLot)],
+      ['Excedente declarado', formatSquareMeters(totalExcess)],
+      ['Área pública', formatSquareMeters(totalGeometric)],
     ]
     for (const [label, value] of areaRows) {
       context.fillStyle = '#526166'
@@ -247,12 +253,12 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
       y += 25
     }
     y += 12
-    context.fillStyle = publicArea.hasPublicArea ? '#B93835' : '#526166'
+    context.fillStyle = totalGeometric > 0 ? '#B93835' : '#526166'
     context.font = '700 14px Arial'
-    y = drawWrappedText(context, publicArea.hasPublicArea ? `Área pública ocupada identificada: área total ${formatSquareMeters(publicArea.geometricPublicArea)}.` : 'Não há área pública ocupada pela regra configurada.', contentX, y, contentWidth, 20)
+    y = drawWrappedText(context, totalGeometric > 0 ? `Área pública ocupada identificada: ${formatSquareMeters(totalGeometric)}.` : 'Não há área pública ocupada identificada.', contentX, y, contentWidth, 20)
     context.fillStyle = '#526166'
     context.font = '12px Arial'
-    y = drawWrappedText(context, 'Hachura = diferença espacial entre ocupação e lote. Excedente = diferença numérica entre as áreas informadas na tabela.', contentX, y + 2, contentWidth, 17)
+    y = drawWrappedText(context, 'A área pública considera a diferença geométrica, mesmo quando a área declarada da ocupação é igual à área do lote. O desenho manual também é incluído.', contentX, y + 2, contentWidth, 17)
   } else {
     context.fillStyle = '#526166'
     context.fillText('Análise não executada.', contentX, y)
@@ -337,6 +343,10 @@ export default function Home() {
   const [isSearching, setSearching] = useState(false)
   const [dimensions, setDimensions] = useState<DimensionItem[]>([])
   const [publicArea, setPublicArea] = useState<PublicAreaResult | null>(null)
+  const [lotSelections, setLotSelections] = useState<SelectedFeature[]>([])
+  const [occupationSelections, setOccupationSelections] = useState<SelectedFeature[]>([])
+  const [publicAreas, setPublicAreas] = useState<PublicAreaResult[]>([])
+  const [manualPublicArea, setManualPublicArea] = useState<ManualPublicAreaResult | null>(null)
 
   useEffect(() => () => runtimeRef.current?.destroy(), [])
 
@@ -367,8 +377,12 @@ export default function Home() {
     setSelection(null)
     setLotSelection(null)
     setOccupationSelection(null)
+    setLotSelections([])
+    setOccupationSelections([])
     setDimensions([])
     setPublicArea(null)
+    setPublicAreas([])
+    setManualPublicArea(null)
     runtimeRef.current?.destroy()
     runtimeRef.current = null
 
@@ -377,8 +391,13 @@ export default function Home() {
       setStatus('Login confirmado. Carregando o Web Map e as camadas protegidas…')
       const runtime = await createAnalysisRuntime(mapHostRef.current, settings, (nextSelection) => {
         setSelection(nextSelection)
-        if (nextSelection.kind === 'lote') setLotSelection(nextSelection)
-        else setOccupationSelection(nextSelection)
+        if (nextSelection.kind === 'lote') {
+          setLotSelection(nextSelection)
+          setLotSelections((current) => current.some((item) => item.title === nextSelection.title) ? current : [...current, nextSelection])
+        } else {
+          setOccupationSelection(nextSelection)
+          setOccupationSelections((current) => current.some((item) => item.title === nextSelection.title) ? current : [...current, nextSelection])
+        }
         setStatus(`${nextSelection.kind === 'lote' ? 'Lote' : 'Ocupação'} selecionado: ${nextSelection.title}`)
       }, () => selectionModeRef.current)
       runtimeRef.current = runtime
@@ -429,13 +448,13 @@ export default function Home() {
 
   const drawDimensions = () => {
     if (!runtimeRef.current) return
-    if (!lotSelection) {
+    if (!lotSelection && !lotSelections.length) {
       setError('Selecione primeiro um lote da camada “Lotes Registrados”.')
       return
     }
     try {
       setError('')
-      const nextDimensions = runtimeRef.current.drawDimensions(lotSelection)
+      const nextDimensions = runtimeRef.current.drawDimensions(lotSelection || lotSelections[0])
       setDimensions(nextDimensions)
       setStatus(`${nextDimensions.length} segmentos cotados no lote selecionado.`)
     } catch (dimensionError) {
@@ -445,18 +464,35 @@ export default function Home() {
 
   const analysePublicArea = async () => {
     if (!runtimeRef.current) return
-    if (!occupationSelection) {
+    if (!occupationSelection && !occupationSelections.length) {
       setError('Selecione primeiro uma ocupação da camada “Ocupacoes Identificadas”.')
       return
     }
     try {
       setError('')
-      setStatus('Calculando a diferença geométrica entre ocupação e lote…')
-      const result = await runtimeRef.current.analysePublicArea(occupationSelection)
-      setPublicArea(result)
-      setStatus(result.hasPublicArea ? 'Área pública ocupada destacada no mapa.' : 'Análise concluída sem área pública hachurada.')
+      setStatus(`Calculando a diferença geométrica de ${occupationSelections.length || 1} ocupação(ões)…`)
+      runtimeRef.current.clearGraphics()
+      const occupations = occupationSelections.length ? occupationSelections : [occupationSelection!]
+      const lots = lotSelections.length ? lotSelections : (lotSelection ? [lotSelection] : [])
+      const results = await Promise.all(occupations.map((occupation) => runtimeRef.current!.analysePublicArea(occupation, lots)))
+      setPublicAreas(results)
+      setPublicArea(results[results.length - 1] || null)
+      setStatus(results.some((item) => item.hasPublicArea) ? `Área pública calculada para ${results.length} ocupação(ões), com hachuras no mapa.` : 'Análise concluída sem área pública hachurada.')
     } catch (analysisError) {
       setError(analysisError instanceof Error ? analysisError.message : 'Não foi possível calcular a área pública.')
+    }
+  }
+
+  const drawManualPublicArea = async () => {
+    if (!runtimeRef.current) return
+    try {
+      setError('')
+      setStatus('Desenhe o polígono da calçada ou área pública no mapa; clique no primeiro vértice para concluir.')
+      const result = await runtimeRef.current.drawManualPublicArea()
+      setManualPublicArea(result)
+      setStatus(`Área pública desenhada: ${formatSquareMeters(result.area)}.`)
+    } catch (drawError) {
+      setError(drawError instanceof Error ? drawError.message : 'Não foi possível desenhar a área pública.')
     }
   }
 
@@ -467,7 +503,7 @@ export default function Home() {
       setExportingImage(true)
       setStatus(`Gerando imagem ${format.toUpperCase()} da área atual do mapa…`)
       const capture = await runtimeRef.current.exportMapImage(format)
-      const dataUrl = await composeLandscapeBoard(capture, format, dimensions, publicArea, lotSelection, occupationSelection)
+      const dataUrl = await composeLandscapeBoard(capture, format, dimensions, publicAreas, manualPublicArea, lotSelection, occupationSelection)
       const link = document.createElement('a')
       link.href = dataUrl
       link.download = `advanced-lotes-df-legal-${new Date().toISOString().slice(0, 10)}.${format}`
@@ -485,7 +521,9 @@ export default function Home() {
     runtimeRef.current?.clearGraphics()
     setDimensions([])
     setPublicArea(null)
-    setStatus('Cotas e hachura removidas do mapa. A seleção foi mantida.')
+    setPublicAreas([])
+    setManualPublicArea(null)
+    setStatus('Cotas, hachuras e desenhos manuais removidos do mapa. A seleção foi mantida.')
     setError('')
   }
 
@@ -495,17 +533,18 @@ export default function Home() {
       setError('')
       setPrinting(true)
       setStatus('Enviando mapa, cotas e hachura para o PDF… A RA é ocultada somente durante a impressão para contornar o erro do GPServer.')
-      const analysisText = publicArea
+      const analysisText = publicAreas.length || manualPublicArea
         ? [
-            `Área da ocupação: ${formatSquareMeters(publicArea.reportedOccupationArea)}`,
-            `Área do lote: ${formatSquareMeters(publicArea.reportedLotArea)}`,
-            `Excedente numérico: ${formatSquareMeters(publicArea.numericalExcess)}`,
-            `Área geométrica hachurada: ${formatSquareMeters(publicArea.geometricPublicArea)}`,
-          ].join('\n')
+            `Itens analisados: ${publicAreas.length}`,
+            `Área ocupada consolidada: ${formatSquareMeters(publicAreas.reduce((sum, item) => sum + item.reportedOccupationArea, 0))}`,
+            `Área dos lotes consolidada: ${formatSquareMeters(publicAreas.reduce((sum, item) => sum + item.reportedLotArea, 0))}`,
+            `Área pública geométrica consolidada: ${formatSquareMeters(publicAreas.reduce((sum, item) => sum + item.geometricPublicArea, 0) + (manualPublicArea?.area || 0))}`,
+            manualPublicArea ? `Área pública desenhada manualmente: ${formatSquareMeters(manualPublicArea.area)}` : '',
+          ].filter(Boolean).join('\n')
         : 'Nenhuma análise de área pública executada.'
       const selectionText = [
-        lotSelection ? `Lote: ${lotSelection.title}\nÁrea informada: ${formatSquareMeters(lotSelection.reportedArea)}` : 'Lote: não selecionado.',
-        occupationSelection ? `Ocupação: ${occupationSelection.title}\nÁrea informada: ${formatSquareMeters(occupationSelection.reportedArea)}` : 'Ocupação: não selecionada.',
+        `Lotes selecionados (${lotSelections.length}): ${lotSelections.map((item) => `${item.title} — ${formatSquareMeters(item.reportedArea)}`).join('; ') || 'nenhum'}`,
+        `Ocupações selecionadas (${occupationSelections.length}): ${occupationSelections.map((item) => `${item.title} — ${formatSquareMeters(item.reportedArea)}`).join('; ') || 'nenhuma'}`,
       ].join('\n\n')
       const fileUrl = await runtimeRef.current.printAnalysis(settings, 'Análise de Lote — DF Legal', analysisText, selectionText)
       window.open(fileUrl, '_blank', 'noopener,noreferrer')
@@ -554,7 +593,7 @@ export default function Home() {
                 Selecionar ocupação
               </button>
             </div>
-            <p className="selection-hint">Modo ativo: <strong>{selectionMode === 'lote' ? 'Lote' : 'Ocupação'}</strong>. As duas seleções permanecem ativas para a análise.</p>
+            <p className="selection-hint">Modo ativo: <strong>{selectionMode === 'lote' ? 'Lote' : 'Ocupação'}</strong>. Clique ou adicione pela busca para acumular múltiplas feições. <strong>{lotSelections.length} lote(s) · {occupationSelections.length} ocupação(ões)</strong>.</p>
             <div className="feature-search">
               <div className="feature-search-entry">
                 <Search size={15} aria-hidden="true" />
@@ -588,6 +627,10 @@ export default function Home() {
             <Button onClick={analysePublicArea} disabled={!mapIsLoaded || !selectionIsOccupation} className="tool-button tool-button-alert">
               <AlertTriangle size={18} strokeWidth={1.8} />
               <span><strong>Ver área pública</strong><small>Hachura o excedente geométrico</small></span>
+            </Button>
+            <Button onClick={() => void drawManualPublicArea()} disabled={!mapIsLoaded} className="tool-button tool-button-manual">
+              <MapPinned size={17} strokeWidth={1.8} />
+              <span><strong>Desenhar área pública</strong><small>Marque calçada ou avanço manualmente</small></span>
             </Button>
             <Button onClick={clearAnalysis} disabled={!mapIsLoaded} variant="ghost" className="tool-button tool-button-clear">
               <Trash2 size={17} strokeWidth={1.8} />
@@ -654,7 +697,7 @@ export default function Home() {
           </div>
         )}
 
-        {(dimensions.length > 0 || publicArea) && (
+        {(dimensions.length > 0 || publicAreas.length > 0 || manualPublicArea) && (
           <aside className="analysis-panel">
             <div className="analysis-panel-texture" style={{ backgroundImage: 'url(/manus-storage/parcel-analysis-texture_08b98a22.jpg)' }} />
             <div className="analysis-panel-content">
@@ -667,16 +710,20 @@ export default function Home() {
                   </div>
                 </section>
               )}
-              {publicArea && (
-                <section className={publicArea.hasPublicArea ? 'public-result has-alert' : 'public-result'}>
-                  <div className="result-heading"><AlertTriangle size={16} /> <span>{publicArea.hasPublicArea ? 'Área pública ocupada' : 'Sem área pública hachurada'}</span></div>
+              {(publicAreas.length > 0 || manualPublicArea) && (
+                <section className={publicAreas.some((item) => item.hasPublicArea) || manualPublicArea ? 'public-result has-alert' : 'public-result'}>
+                  <div className="result-heading"><AlertTriangle size={16} /> <span>ÁREA PÚBLICA · CONSOLIDADO</span></div>
                   <div className="area-grid">
-                    <div><small>OCUPAÇÃO</small><strong>{formatSquareMeters(publicArea.reportedOccupationArea)}</strong></div>
-                    <div><small>LOTE</small><strong>{formatSquareMeters(publicArea.reportedLotArea)}</strong></div>
-                    <div><small>EXCEDENTE</small><strong>{formatSquareMeters(publicArea.numericalExcess)}</strong></div>
-                    <div><small>HACHURADO</small><strong>{formatSquareMeters(publicArea.geometricPublicArea)}</strong></div>
+                    <div><small>ITENS</small><strong>{publicAreas.length}</strong></div>
+                    <div><small>ÁREA OCUPADA</small><strong>{formatSquareMeters(publicAreas.reduce((sum, item) => sum + item.reportedOccupationArea, 0))}</strong></div>
+                    <div><small>ÁREA DOS LOTES</small><strong>{formatSquareMeters(publicAreas.reduce((sum, item) => sum + item.reportedLotArea, 0))}</strong></div>
+                    <div><small>ÁREA PÚBLICA</small><strong>{formatSquareMeters(publicAreas.reduce((sum, item) => sum + item.geometricPublicArea, 0) + (manualPublicArea?.area || 0))}</strong></div>
                   </div>
-                  <p>{publicArea.note}</p>
+                  <div className="public-area-table">
+                    {publicAreas.map((item, index) => <div key={`${item.occupation.title}-${index}`}><span>{item.occupation.title}</span><strong>{formatSquareMeters(item.geometricPublicArea)}</strong></div>)}
+                    {manualPublicArea && <div><span>Desenho manual · calçada/avanço</span><strong>{formatSquareMeters(manualPublicArea.area)}</strong></div>}
+                  </div>
+                  <p>O cálculo usa a diferença geométrica, mesmo quando a área informada da ocupação é igual à do lote. Cada item é apresentado acima e o total é consolidado.</p>
                 </section>
               )}
             </div>
