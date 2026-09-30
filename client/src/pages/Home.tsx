@@ -642,7 +642,7 @@ export default function Home() {
             <p className="section-label">SAÍDA CARTOGRÁFICA</p>
             <Button onClick={printAnalysis} disabled={!mapIsLoaded || isPrinting} className="print-button">
               {isPrinting ? <LoaderCircle className="animate-spin" size={18} /> : <FileDown size={18} />}
-              {isPrinting ? 'Gerando PDF…' : 'Imprimir mapa analisado'}
+              {isPrinting ? 'Gerando PDF…' : 'Baixar PDF do mapa analisado'}
             </Button>
             <p className="print-hint">O PDF usa o Export Web Map; a RA é ocultada somente durante a chamada. PNG/JPG são alternativas diretas da área atual do mapa.</p>
             <div className="image-export-actions">
