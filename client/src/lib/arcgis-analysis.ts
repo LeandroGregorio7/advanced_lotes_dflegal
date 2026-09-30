@@ -433,9 +433,12 @@ export async function createAnalysisRuntime(
       const difference = geometryEngine.difference(occupationPolygon, lotPolygon)
       const hachGeometry = firstGeometry(difference)
       const geometricPublicArea = geodesicArea(difference)
-      // A diferença geométrica é a fonte de verdade: a área declarada pode ser igual
-      // à do lote mesmo quando a ocupação avança sobre calçada ou outra área pública.
-      const hasPublicArea = geometricPublicArea > 0.5
+      // A regra automática combina os campos de área da tabela com a geometria.
+      // Assim, o excedente declarado continua sendo informado como antes, mas um
+      // avanço geométrico também é identificado quando as áreas declaradas são iguais.
+      const hasAttributeExcess = numericalExcess > 0.5
+      const hasGeometricDifference = geometricPublicArea > 0.5
+      const hasPublicArea = hasAttributeExcess || hasGeometricDifference
 
       if (hasPublicArea && hachGeometry) {
         hatchLayer.addMany([
@@ -476,8 +479,10 @@ export async function createAnalysisRuntime(
         geometricPublicArea,
         hasPublicArea,
         note: hasPublicArea
-          ? `A hachura representa ${geometricPublicArea.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m² fora do lote, inclusive quando a área declarada é igual à do lote.`
-          : 'Não foi identificada diferença geométrica da ocupação fora do lote.',
+          ? hasGeometricDifference
+            ? `A hachura automática representa ${geometricPublicArea.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m² fora do lote. Excedente da tabela: ${numericalExcess.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m².`
+            : `A tabela de atributos indica excedente de ${numericalExcess.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m², mas não foi encontrada diferença geométrica para hachurar.`
+          : 'Não foi identificada diferença geométrica nem excedente nas áreas da tabela de atributos.',
       }
     },
     drawManualPublicArea: () => new Promise((resolve, reject) => {

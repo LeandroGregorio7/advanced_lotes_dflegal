@@ -258,7 +258,7 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
     y = drawWrappedText(context, totalGeometric > 0 ? `Área pública ocupada identificada: ${formatSquareMeters(totalGeometric)}.` : 'Não há área pública ocupada identificada.', contentX, y, contentWidth, 20)
     context.fillStyle = '#526166'
     context.font = '12px Arial'
-    y = drawWrappedText(context, 'A área pública considera a diferença geométrica, mesmo quando a área declarada da ocupação é igual à área do lote. O desenho manual também é incluído.', contentX, y + 2, contentWidth, 17)
+    y = drawWrappedText(context, 'O cálculo automático combina as áreas da tabela de atributos com a diferença geométrica. O desenho manual é uma operação independente e também é incluído.', contentX, y + 2, contentWidth, 17)
   } else {
     context.fillStyle = '#526166'
     context.fillText('Análise não executada.', contentX, y)
@@ -626,11 +626,11 @@ export default function Home() {
             </Button>
             <Button onClick={analysePublicArea} disabled={!mapIsLoaded || !selectionIsOccupation} className="tool-button tool-button-alert">
               <AlertTriangle size={18} strokeWidth={1.8} />
-              <span><strong>Ver área pública</strong><small>Hachura o excedente geométrico</small></span>
+              <span><strong>Calcular área pública automática</strong><small>Usa tabela de atributos + diferença geométrica</small></span>
             </Button>
             <Button onClick={() => void drawManualPublicArea()} disabled={!mapIsLoaded} className="tool-button tool-button-manual">
               <MapPinned size={17} strokeWidth={1.8} />
-              <span><strong>Desenhar área pública</strong><small>Marque calçada ou avanço manualmente</small></span>
+              <span><strong>Desenhar área pública manual</strong><small>Marque calçada ou avanço manualmente</small></span>
             </Button>
             <Button onClick={clearAnalysis} disabled={!mapIsLoaded} variant="ghost" className="tool-button tool-button-clear">
               <Trash2 size={17} strokeWidth={1.8} />
@@ -723,7 +723,7 @@ export default function Home() {
                     {publicAreas.map((item, index) => <div key={`${item.occupation.title}-${index}`}><span>{item.occupation.title}</span><strong>{formatSquareMeters(item.geometricPublicArea)}</strong></div>)}
                     {manualPublicArea && <div><span>Desenho manual · calçada/avanço</span><strong>{formatSquareMeters(manualPublicArea.area)}</strong></div>}
                   </div>
-                  <p>O cálculo usa a diferença geométrica, mesmo quando a área informada da ocupação é igual à do lote. Cada item é apresentado acima e o total é consolidado.</p>
+                  <p>O cálculo automático usa a área da tabela e a diferença geométrica; por isso identifica avanço mesmo quando as áreas declaradas são iguais. O desenho manual permanece independente. Cada item e o consolidado são apresentados.</p>
                 </section>
               )}
             </div>
