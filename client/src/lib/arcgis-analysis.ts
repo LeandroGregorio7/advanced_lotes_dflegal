@@ -58,7 +58,9 @@ export interface SelectedFeature {
 }
 
 export interface DimensionItem {
-  label: string
+  featureTitle: string
+  featureKind: FeatureKind | 'area-publica'
+  segment: number
   length: number
 }
 
@@ -79,6 +81,7 @@ export interface PublicAreaResult {
   numericalExcess: number
   geometricPublicArea: number
   hasPublicArea: boolean
+  dimensions: DimensionItem[]
   note: string
 }
 
@@ -93,7 +96,8 @@ export interface AnalysisRuntime {
   setSelectionMode: (mode: FeatureKind) => void
   searchFeatures: (mode: FeatureKind, searchText: string) => Promise<SelectedFeature[]>
   selectFeature: (selection: SelectedFeature, zoomToFeature?: boolean) => Promise<void>
-  drawDimensions: (lotes: SelectedFeature[]) => DimensionItem[]
+  drawDimensions: (features: SelectedFeature[]) => DimensionItem[]
+  clearPublicAreaGraphics: () => void
   analysePublicArea: (ocupacao: SelectedFeature, preferredLots?: SelectedFeature[]) => Promise<PublicAreaResult>
   drawManualPublicArea: () => Promise<ManualPublicAreaResult>
   clearGraphics: () => void
@@ -173,7 +177,7 @@ const ensurePolygon = (graphic: Graphic, layerLabel: string) => {
 const findFeatureLayer = (webmap: WebMap, title: string) =>
   webmap.allLayers.find((layer) => layer.type === 'feature' && layer.title === title) as FeatureLayer | undefined
 
-const buildDimensionGraphics = (polygon: Polygon, viewResolution: number) => {
+const buildDimensionGraphics = (polygon: Polygon, viewResolution: number, featureTitle: string, featureKind: FeatureKind | 'area-publica', dimensionGroup: string) => {
   const outerRing = polygon.rings[0]
   if (!outerRing || outerRing.length < 3) throw new Error('O lote selecionado não possui vértices suficientes para cotagem.')
 
@@ -188,25 +192,16 @@ const buildDimensionGraphics = (polygon: Polygon, viewResolution: number) => {
   for (let index = 0; index < vertices.length; index += 1) {
     const start = vertices[index]
     const end = vertices[(index + 1) % vertices.length]
-    const segment = new Polyline({
+    const segmentLine = new Polyline({
       spatialReference: polygon.spatialReference,
       paths: [[start, end]],
     })
-    const length = geometryEngine.geodesicLength(segment, 'meters') || 0
+    const length = geometryEngine.geodesicLength(segmentLine, 'meters') || 0
     if (length < 0.01) continue
 
-    const lengths = vertices.map((vertex, vertexIndex) => {
-      const next = vertices[(vertexIndex + 1) % vertices.length]
-      return Math.hypot(next[0] - vertex[0], next[1] - vertex[1])
-    }).filter((value) => value > 0)
-    const sortedLengths = [...lengths].sort((a, b) => a - b)
-    const medianLength = sortedLengths[Math.floor(sortedLengths.length / 2)] || length
-    const firstIsLength = (lengths[0] || length) >= (lengths[1] || length)
-    const isLength = vertices.length === 4
-      ? (index % 2 === 0 ? firstIsLength : !firstIsLength)
-      : length >= medianLength
-    const label = isLength ? 'Comprimento' : 'Largura'
-    const text = `${label}: ${length.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
+    const segment = index + 1
+    const text = `${length.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
+    const dimensionAttributes = { analysisType: 'dimension', dimensionGroup, featureTitle, featureKind, segment, lengthMeters: length }
     const dx = end[0] - start[0]
     const dy = end[1] - start[1]
     const planarLength = Math.hypot(dx, dy)
@@ -219,7 +214,25 @@ const buildDimensionGraphics = (polygon: Polygon, viewResolution: number) => {
     })
     let normalX = -dy / planarLength
     let normalY = dx / planarLength
-    if (centroid && (midpoint.x - centroid.x) * normalX + (midpoint.y - centroid.y) * normalY < 0) {
+    const probeDistance = Math.max(0.01, Math.min(viewResolution * 2, offsetDistance * 0.25))
+    const positiveProbe = new Point({
+      x: midpoint.x + normalX * probeDistance,
+      y: midpoint.y + normalY * probeDistance,
+      spatialReference: polygon.spatialReference,
+    })
+    const negativeProbe = new Point({
+      x: midpoint.x - normalX * probeDistance,
+      y: midpoint.y - normalY * probeDistance,
+      spatialReference: polygon.spatialReference,
+    })
+    const positiveIsInside = geometryEngine.contains(polygon, positiveProbe)
+    const negativeIsInside = geometryEngine.contains(polygon, negativeProbe)
+    const fallbackPointsInward = centroid
+      ? (midpoint.x - centroid.x) * normalX + (midpoint.y - centroid.y) * normalY < 0
+      : false
+    const shouldFlipNormal = (positiveIsInside && !negativeIsInside)
+      || (positiveIsInside === negativeIsInside && fallbackPointsInward)
+    if (shouldFlipNormal) {
       normalX *= -1
       normalY *= -1
     }
@@ -238,15 +251,17 @@ const buildDimensionGraphics = (polygon: Polygon, viewResolution: number) => {
       new Graphic({
         geometry: dimensionLine,
         symbol: new SimpleLineSymbol({ color: dimensionColor, width: 2.1, style: 'solid' }),
-        attributes: { analysisType: 'dimension-line', segment: label, lengthMeters: length },
+        attributes: { ...dimensionAttributes, analysisType: 'dimension-line' },
       }),
       new Graphic({
         geometry: extensionStart,
         symbol: new SimpleLineSymbol({ color: dimensionColor, width: 1.2, style: 'short-dot' }),
+        attributes: dimensionAttributes,
       }),
       new Graphic({
         geometry: extensionEnd,
         symbol: new SimpleLineSymbol({ color: dimensionColor, width: 1.2, style: 'short-dot' }),
+        attributes: dimensionAttributes,
       }),
       new Graphic({
         geometry: labelPoint,
@@ -259,14 +274,15 @@ const buildDimensionGraphics = (polygon: Polygon, viewResolution: number) => {
           yoffset: 0,
           font: { family: 'Source Sans 3', size: 11, weight: 'bold' },
         }),
-        attributes: { analysisType: 'dimension-label', segment: label, lengthMeters: length },
+        attributes: { ...dimensionAttributes, analysisType: 'dimension-label' },
       }),
       new Graphic({
         geometry: new Point({ x: start[0], y: start[1], spatialReference: polygon.spatialReference }),
         symbol: new SimpleMarkerSymbol({ style: 'x', color: dimensionColor, size: 7, outline: { color: '#FFFDF6', width: 0.7 } }),
+        attributes: dimensionAttributes,
       }),
     )
-    dimensions.push({ label, length })
+    dimensions.push({ featureTitle, featureKind, segment, length })
   }
 
   return { graphics, dimensions }
@@ -416,14 +432,20 @@ export async function createAnalysisRuntime(
     },
     searchFeatures,
     selectFeature,
-    drawDimensions: (lotes) => {
-      dimensionLayer.removeAll()
+    drawDimensions: (features) => {
       const allDimensions: DimensionItem[] = []
-      lotes.forEach((lote, lotIndex) => {
-        const polygon = ensurePolygon(lote.graphic, `O lote ${lotIndex + 1}`)
-        const { graphics, dimensions } = buildDimensionGraphics(polygon, view.resolution)
+      const groups = new Set(features.map((feature) => `segments:${feature.kind}`))
+      dimensionLayer.graphics
+        .toArray()
+        .filter((graphic) => groups.has(String(graphic.attributes?.dimensionGroup || '')))
+        .forEach((graphic) => dimensionLayer.remove(graphic))
+      features.forEach((feature, featureIndex) => {
+        const label = feature.kind === 'lote' ? `O lote ${featureIndex + 1}` : `A ocupação ${featureIndex + 1}`
+        const polygon = ensurePolygon(feature.graphic, label)
+        const dimensionGroup = `segments:${feature.kind}`
+        const { graphics, dimensions } = buildDimensionGraphics(polygon, view.resolution, feature.title, feature.kind, dimensionGroup)
         dimensionLayer.addMany(graphics)
-        allDimensions.push(...dimensions.map((item) => ({ ...item, label: `${lote.title} · ${item.label}` })))
+        allDimensions.push(...dimensions)
       })
       return allDimensions
     },
@@ -443,6 +465,7 @@ export async function createAnalysisRuntime(
       const hasAttributeExcess = numericalExcess > 0.5
       const hasGeometricDifference = geometricPublicArea > 0.5
       const hasPublicArea = hasAttributeExcess || hasGeometricDifference
+      const dimensions: DimensionItem[] = []
 
       if (hasPublicArea && hachGeometry) {
         hatchLayer.addMany([
@@ -481,6 +504,17 @@ export async function createAnalysisRuntime(
             attributes: { analysisType: 'public-area-label', geometricArea: geometricPublicArea },
           }),
         ])
+        if (hachGeometry.type === 'polygon') {
+          const { graphics, dimensions: polygonDimensions } = buildDimensionGraphics(
+            hachGeometry as Polygon,
+            view.resolution,
+            occupation.title,
+            'area-publica',
+            'public-area',
+          )
+          dimensionLayer.addMany(graphics)
+          dimensions.push(...polygonDimensions)
+        }
       }
 
       return {
@@ -491,6 +525,7 @@ export async function createAnalysisRuntime(
         numericalExcess,
         geometricPublicArea,
         hasPublicArea,
+        dimensions,
         note: hasPublicArea
           ? hasGeometricDifference
             ? `A hachura automática representa ${geometricPublicArea.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m² fora do lote. Excedente da tabela: ${numericalExcess.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m².`
@@ -516,6 +551,13 @@ export async function createAnalysisRuntime(
       hatchLayer.removeAll()
       dimensionLayer.removeAll()
       manualLayer.removeAll()
+    },
+    clearPublicAreaGraphics: () => {
+      hatchLayer.removeAll()
+      dimensionLayer.graphics
+        .toArray()
+        .filter((graphic) => graphic.attributes?.dimensionGroup === 'public-area')
+        .forEach((graphic) => dimensionLayer.remove(graphic))
     },
     exportMapImage: async (format) => {
       const screenshot = await view.takeScreenshot({ format })
