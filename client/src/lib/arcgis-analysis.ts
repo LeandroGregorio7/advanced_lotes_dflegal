@@ -1,6 +1,6 @@
 /**
  * Carta Técnica Operacional: integra o MapView com operações cartográficas
- * explícitas. Azul = referência, ocre = cotas, vermelho = área pública.
+ * explícitas. Azul = cotas e referências, vermelho = área pública.
  */
 import Graphic from '@arcgis/core/Graphic'
 import WebMap from '@arcgis/core/WebMap'
@@ -15,7 +15,6 @@ import * as geometryEngine from '@arcgis/core/geometry/geometryEngine'
 import * as webMercatorUtils from '@arcgis/core/geometry/support/webMercatorUtils'
 import SimpleFillSymbol from '@arcgis/core/symbols/SimpleFillSymbol'
 import SimpleLineSymbol from '@arcgis/core/symbols/SimpleLineSymbol'
-import SimpleMarkerSymbol from '@arcgis/core/symbols/SimpleMarkerSymbol'
 import SketchViewModel from '@arcgis/core/widgets/Sketch/SketchViewModel'
 import TextSymbol from '@arcgis/core/symbols/TextSymbol'
 import PrintTemplate from '@arcgis/core/rest/support/PrintTemplate'
@@ -106,7 +105,6 @@ export interface AnalysisRuntime {
   destroy: () => void
 }
 
-const dimensionColor = '#C58A28'
 const alertColor = '#B93835'
 
 const numberFromValue = (value: unknown) => {
@@ -177,15 +175,13 @@ const ensurePolygon = (graphic: Graphic, layerLabel: string) => {
 const findFeatureLayer = (webmap: WebMap, title: string) =>
   webmap.allLayers.find((layer) => layer.type === 'feature' && layer.title === title) as FeatureLayer | undefined
 
-const buildDimensionGraphics = (polygon: Polygon, viewResolution: number, featureTitle: string, featureKind: FeatureKind | 'area-publica', dimensionGroup: string) => {
+const buildDimensionGraphics = (polygon: Polygon, featureTitle: string, featureKind: FeatureKind | 'area-publica', dimensionGroup: string) => {
   const outerRing = polygon.rings[0]
   if (!outerRing || outerRing.length < 3) throw new Error('O lote selecionado não possui vértices suficientes para cotagem.')
 
   const vertices = normalizedRing(outerRing)
   if (vertices.length < 3) throw new Error('O lote selecionado não possui segmentos válidos para cotagem.')
 
-  const centroid = polygon.centroid
-  const offsetDistance = Math.max(2, viewResolution * 24)
   const graphics: Graphic[] = []
   const dimensions: DimensionItem[] = []
 
@@ -212,76 +208,19 @@ const buildDimensionGraphics = (polygon: Polygon, viewResolution: number, featur
       y: (start[1] + end[1]) / 2,
       spatialReference: polygon.spatialReference,
     })
-    let normalX = -dy / planarLength
-    let normalY = dx / planarLength
-    const probeDistance = Math.max(0.01, Math.min(viewResolution * 2, offsetDistance * 0.25))
-    const positiveProbe = new Point({
-      x: midpoint.x + normalX * probeDistance,
-      y: midpoint.y + normalY * probeDistance,
-      spatialReference: polygon.spatialReference,
-    })
-    const negativeProbe = new Point({
-      x: midpoint.x - normalX * probeDistance,
-      y: midpoint.y - normalY * probeDistance,
-      spatialReference: polygon.spatialReference,
-    })
-    const positiveIsInside = geometryEngine.contains(polygon, positiveProbe)
-    const negativeIsInside = geometryEngine.contains(polygon, negativeProbe)
-    const fallbackPointsInward = centroid
-      ? (midpoint.x - centroid.x) * normalX + (midpoint.y - centroid.y) * normalY < 0
-      : false
-    const shouldFlipNormal = (positiveIsInside && !negativeIsInside)
-      || (positiveIsInside === negativeIsInside && fallbackPointsInward)
-    if (shouldFlipNormal) {
-      normalX *= -1
-      normalY *= -1
-    }
-    const offsetStart = [start[0] + normalX * offsetDistance, start[1] + normalY * offsetDistance]
-    const offsetEnd = [end[0] + normalX * offsetDistance, end[1] + normalY * offsetDistance]
-    const labelPoint = new Point({
-      x: midpoint.x + normalX * offsetDistance,
-      y: midpoint.y + normalY * offsetDistance,
-      spatialReference: polygon.spatialReference,
-    })
-    const dimensionLine = new Polyline({ spatialReference: polygon.spatialReference, paths: [[offsetStart, offsetEnd]] })
-    const extensionStart = new Polyline({ spatialReference: polygon.spatialReference, paths: [[start, offsetStart]] })
-    const extensionEnd = new Polyline({ spatialReference: polygon.spatialReference, paths: [[end, offsetEnd]] })
-
-    graphics.push(
-      new Graphic({
-        geometry: dimensionLine,
-        symbol: new SimpleLineSymbol({ color: dimensionColor, width: 2.1, style: 'solid' }),
-        attributes: { ...dimensionAttributes, analysisType: 'dimension-line' },
+    graphics.push(new Graphic({
+      geometry: midpoint,
+      symbol: new TextSymbol({
+        text,
+        color: '#00AEEF',
+        haloColor: '#FFFFFF',
+        haloSize: 2.8,
+        angle,
+        yoffset: 0,
+        font: { family: 'Source Sans 3', size: 10, weight: 'bold' },
       }),
-      new Graphic({
-        geometry: extensionStart,
-        symbol: new SimpleLineSymbol({ color: dimensionColor, width: 1.2, style: 'short-dot' }),
-        attributes: dimensionAttributes,
-      }),
-      new Graphic({
-        geometry: extensionEnd,
-        symbol: new SimpleLineSymbol({ color: dimensionColor, width: 1.2, style: 'short-dot' }),
-        attributes: dimensionAttributes,
-      }),
-      new Graphic({
-        geometry: labelPoint,
-        symbol: new TextSymbol({
-          text,
-          color: '#725016',
-          haloColor: '#FFFDF6',
-          haloSize: 2.2,
-          angle,
-          yoffset: 0,
-          font: { family: 'Source Sans 3', size: 11, weight: 'bold' },
-        }),
-        attributes: { ...dimensionAttributes, analysisType: 'dimension-label' },
-      }),
-      new Graphic({
-        geometry: new Point({ x: start[0], y: start[1], spatialReference: polygon.spatialReference }),
-        symbol: new SimpleMarkerSymbol({ style: 'x', color: dimensionColor, size: 7, outline: { color: '#FFFDF6', width: 0.7 } }),
-        attributes: dimensionAttributes,
-      }),
-    )
+      attributes: { ...dimensionAttributes, analysisType: 'dimension-label' },
+    }))
     dimensions.push({ featureTitle, featureKind, segment, length })
   }
 
@@ -443,7 +382,7 @@ export async function createAnalysisRuntime(
         const label = feature.kind === 'lote' ? `O lote ${featureIndex + 1}` : `A ocupação ${featureIndex + 1}`
         const polygon = ensurePolygon(feature.graphic, label)
         const dimensionGroup = `segments:${feature.kind}`
-        const { graphics, dimensions } = buildDimensionGraphics(polygon, view.resolution, feature.title, feature.kind, dimensionGroup)
+        const { graphics, dimensions } = buildDimensionGraphics(polygon, feature.title, feature.kind, dimensionGroup)
         dimensionLayer.addMany(graphics)
         allDimensions.push(...dimensions)
       })
@@ -507,7 +446,6 @@ export async function createAnalysisRuntime(
         if (hachGeometry.type === 'polygon') {
           const { graphics, dimensions: polygonDimensions } = buildDimensionGraphics(
             hachGeometry as Polygon,
-            view.resolution,
             occupation.title,
             'area-publica',
             'public-area',
