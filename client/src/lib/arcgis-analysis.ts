@@ -1,6 +1,6 @@
 /**
  * Carta Técnica Operacional: integra o MapView com operações cartográficas
- * explícitas. Azul = cotas e referências, vermelho = área pública.
+ * explícitas. Azul = cotas de lotes, magenta = cotas de ocupações, vermelho = área pública.
  */
 import Graphic from '@arcgis/core/Graphic'
 import WebMap from '@arcgis/core/WebMap'
@@ -105,7 +105,16 @@ export interface AnalysisRuntime {
   destroy: () => void
 }
 
-const dimensionBlueColor = '#0066FF'
+const DIMENSION_COLORS: Record<FeatureKind | 'area-publica', { text: string; halo: string }> = {
+  lote: { text: '#0066FF', halo: '#FFFFFF' }, // Azul para Lotes Registrados
+  ocupacao: { text: '#C2185B', halo: '#FFFFFF' }, // Magenta escuro para Ocupações Identificadas
+  'area-publica': { text: '#8A211F', halo: '#FFFDF6' }, // Vermelho escuro para Área Pública
+}
+
+interface PlacedLabelFootprint {
+  samples: Array<{ x: number; y: number }>
+  radius: number
+}
 
 const numberFromValue = (value: unknown) => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0
@@ -184,12 +193,83 @@ const ensurePolygon = (graphic: Graphic, layerLabel: string) => {
 const findFeatureLayer = (webmap: WebMap, title: string) =>
   webmap.allLayers.find((layer) => layer.type === 'feature' && layer.title === title) as FeatureLayer | undefined
 
+const createLabelFootprint = (
+  cx: number,
+  cy: number,
+  ux: number,
+  uy: number,
+  halfWidth: number,
+  halfHeight: number,
+): PlacedLabelFootprint => {
+  const reach = Math.max(0, halfWidth - halfHeight * 0.5)
+  return {
+    radius: halfHeight,
+    samples: [
+      { x: cx - ux * reach, y: cy - uy * reach },
+      { x: cx - ux * (reach * 0.5), y: cy - uy * (reach * 0.5) },
+      { x: cx, y: cy },
+      { x: cx + ux * (reach * 0.5), y: cy + uy * (reach * 0.5) },
+      { x: cx + ux * reach, y: cy + uy * reach },
+    ],
+  }
+}
+
+const footprintsCollide = (a: PlacedLabelFootprint, b: PlacedLabelFootprint): boolean => {
+  const minDistance = a.radius + b.radius
+  const minDistanceSq = minDistance * minDistance
+  for (const sa of a.samples) {
+    for (const sb of b.samples) {
+      const dx = sa.x - sb.x
+      const dy = sa.y - sb.y
+      if (dx * dx + dy * dy < minDistanceSq) return true
+    }
+  }
+  return false
+}
+
+const minClearanceToExisting = (
+  candidate: PlacedLabelFootprint,
+  existing: PlacedLabelFootprint[],
+): number => {
+  if (!existing.length) return Number.POSITIVE_INFINITY
+  let minClearance = Number.POSITIVE_INFINITY
+  for (const item of existing) {
+    for (const sa of candidate.samples) {
+      for (const sb of item.samples) {
+        const dist = Math.hypot(sa.x - sb.x, sa.y - sb.y) - (candidate.radius + item.radius)
+        if (dist < minClearance) minClearance = dist
+      }
+    }
+  }
+  return minClearance
+}
+
+const extractExistingFootprints = (
+  dimensionLayer: GraphicsLayer,
+  viewResolution: number,
+): PlacedLabelFootprint[] => {
+  const res = Math.max(viewResolution || 0.15, 0.02)
+  const footprints: PlacedLabelFootprint[] = []
+  dimensionLayer.graphics.forEach((graphic) => {
+    if (graphic.geometry?.type !== 'point') return
+    const pt = graphic.geometry as Point
+    const ux = Number(graphic.attributes?.ux ?? 1)
+    const uy = Number(graphic.attributes?.uy ?? 0)
+    const halfWidth = Number(graphic.attributes?.halfWidth ?? 24 * res)
+    const halfHeight = Number(graphic.attributes?.halfHeight ?? 7.5 * res)
+    footprints.push(createLabelFootprint(pt.x, pt.y, ux, uy, halfWidth, halfHeight))
+  })
+  return footprints
+}
+
 const buildDimensionGraphics = (
   polygon: Polygon,
+  viewResolution: number,
   viewRotation: number,
   featureTitle: string,
   featureKind: FeatureKind | 'area-publica',
   dimensionGroup: string,
+  placedFootprints: PlacedLabelFootprint[] = [],
 ) => {
   const outerRing = polygon.rings[0]
   if (!outerRing || outerRing.length < 3) {
@@ -201,6 +281,9 @@ const buildDimensionGraphics = (
     throw new Error('O polígono selecionado não possui segmentos válidos para cotagem.')
   }
 
+  const res = Math.max(viewResolution || 0.15, 0.02)
+  const centroid = polygon.centroid
+  const colorStyle = DIMENSION_COLORS[featureKind] || DIMENSION_COLORS.lote
   const graphics: Graphic[] = []
   const dimensions: DimensionItem[] = []
 
@@ -230,25 +313,97 @@ const buildDimensionGraphics = (
     const planarLength = Math.hypot(dx, dy)
     if (!planarLength) continue
 
-    // O TextSymbol do ArcGIS rotaciona no sentido horário (eixo Y de tela para baixo),
-    // enquanto as coordenadas do mapa têm eixo Y para cima (Norte).
-    // Por isso invertemos o sinal de atan2(dy, dx) para alinhar exatamente com a aresta.
+    // Vetor unitário ao longo da aresta (tangente)
+    const ux = dx / planarLength
+    const uy = dy / planarLength
+
+    // Vetor normal apontando para fora do polígono
+    let nx = -uy
+    let ny = ux
+    const midX = (start[0] + end[0]) / 2
+    const midY = (start[1] + end[1]) / 2
+    if (centroid) {
+      const toOutX = midX - centroid.x
+      const toOutY = midY - centroid.y
+      if (toOutX * nx + toOutY * ny < 0) {
+        nx = -nx
+        ny = -ny
+      }
+    }
+
+    // Ângulo corrigido para acompanhar a direção de cada lado no ArcGIS TextSymbol
     const angle = normalizeAngle((-(Math.atan2(dy, dx) * 180) / Math.PI) + (viewRotation || 0))
 
-    // Posiciona a cota diretamente sobre o ponto médio da aresta do polígono
-    const midpoint = new Point({
-      x: (start[0] + end[0]) / 2,
-      y: (start[1] + end[1]) / 2,
+    // Dimensões aproximadas da caixa de texto em unidades do mapa
+    const halfWidth = Math.max(text.length * 3.4, 18) * res
+    const halfHeight = 7.5 * res
+
+    // Posições candidatas ao longo da aresta (mantém na aresta se possível)
+    const canSlideAlongEdge = planarLength > halfWidth * 2.6
+    const tCandidates = canSlideAlongEdge ? [0.5, 0.32, 0.68, 0.22, 0.78] : [0.5]
+
+    // Se houver colisão inevitável na aresta (ex.: aresta compartilhada entre Lote e Ocupação),
+    // desloca levemente o Lote para dentro (-1) e a Ocupação/Área Pública para fora (+1)
+    const preferredNormalSign = featureKind === 'lote' ? -1 : 1
+    const step = 13 * res
+    const normalOffsets = [
+      0,
+      preferredNormalSign * step,
+      -preferredNormalSign * step,
+      preferredNormalSign * step * 1.85,
+      -preferredNormalSign * step * 1.85,
+    ]
+
+    let chosenX = midX
+    let chosenY = midY
+    let chosenFootprint = createLabelFootprint(midX, midY, ux, uy, halfWidth, halfHeight)
+    let foundCollisionFree = false
+    let bestClearance = Number.NEGATIVE_INFINITY
+
+    for (const normalOffset of normalOffsets) {
+      for (const t of tCandidates) {
+        const candX = start[0] + dx * t + nx * normalOffset
+        const candY = start[1] + dy * t + ny * normalOffset
+        const candFootprint = createLabelFootprint(candX, candY, ux, uy, halfWidth, halfHeight)
+
+        const hasCollision = placedFootprints.some((existing) =>
+          footprintsCollide(candFootprint, existing),
+        )
+
+        if (!hasCollision) {
+          chosenX = candX
+          chosenY = candY
+          chosenFootprint = candFootprint
+          foundCollisionFree = true
+          break
+        }
+
+        const clearance = minClearanceToExisting(candFootprint, placedFootprints)
+        if (clearance > bestClearance) {
+          bestClearance = clearance
+          chosenX = candX
+          chosenY = candY
+          chosenFootprint = candFootprint
+        }
+      }
+      if (foundCollisionFree) break
+    }
+
+    placedFootprints.push(chosenFootprint)
+
+    const labelPoint = new Point({
+      x: chosenX,
+      y: chosenY,
       spatialReference: polygon.spatialReference,
     })
 
     graphics.push(
       new Graphic({
-        geometry: midpoint,
+        geometry: labelPoint,
         symbol: new TextSymbol({
           text,
-          color: dimensionBlueColor,
-          haloColor: '#FFFFFF',
+          color: colorStyle.text,
+          haloColor: colorStyle.halo,
           haloSize: 2.5,
           angle,
           xoffset: 0,
@@ -257,7 +412,14 @@ const buildDimensionGraphics = (
           verticalAlignment: 'middle',
           font: { family: 'Source Sans 3', size: 10, weight: 'bold' },
         }),
-        attributes: { ...dimensionAttributes, analysisType: 'dimension-label' },
+        attributes: {
+          ...dimensionAttributes,
+          analysisType: 'dimension-label',
+          ux,
+          uy,
+          halfWidth,
+          halfHeight,
+        },
       }),
     )
     dimensions.push({ featureTitle, featureKind, segment, length })
@@ -347,6 +509,7 @@ export async function createAnalysisRuntime(
   const occupationLayer = findFeatureLayer(webmap, settings.occupationLayerTitle)
   if (!lotLayer || !occupationLayer) {
     const available = webmap.allLayers
+      .toArray()
       .map((layer) => layer.title)
       .filter(Boolean)
       .join(' | ')
@@ -452,16 +615,22 @@ export async function createAnalysisRuntime(
         .toArray()
         .filter((graphic) => groups.has(String(graphic.attributes?.dimensionGroup || '')))
         .forEach((graphic) => dimensionLayer.remove(graphic))
+
+      // Carrega as posições das cotas já ativas no mapa (ex.: lotes já cotados) para evitar colisão
+      const placedFootprints = extractExistingFootprints(dimensionLayer, view.resolution)
+
       features.forEach((feature, featureIndex) => {
         const label = feature.kind === 'lote' ? `O lote ${featureIndex + 1}` : `A ocupação ${featureIndex + 1}`
         const polygon = ensurePolygon(feature.graphic, label)
         const dimensionGroup = `segments:${feature.kind}`
         const { graphics, dimensions } = buildDimensionGraphics(
           polygon,
+          view.resolution,
           view.rotation,
           feature.title,
           feature.kind,
           dimensionGroup,
+          placedFootprints,
         )
         dimensionLayer.addMany(graphics)
         allDimensions.push(...dimensions)
@@ -523,12 +692,15 @@ export async function createAnalysisRuntime(
           }),
         ])
         if (hachGeometry.type === 'polygon') {
+          const placedFootprints = extractExistingFootprints(dimensionLayer, view.resolution)
           const { graphics, dimensions: polygonDimensions } = buildDimensionGraphics(
             hachGeometry as Polygon,
+            view.resolution,
             view.rotation,
             occupation.title,
             'area-publica',
             'public-area',
+            placedFootprints,
           )
           dimensionLayer.addMany(graphics)
           dimensions.push(...polygonDimensions)
@@ -562,12 +734,15 @@ export async function createAnalysisRuntime(
             reject(new Error('Desenhe um polígono válido para representar a área pública.'))
             return
           }
+          const placedFootprints = extractExistingFootprints(dimensionLayer, view.resolution)
           const { graphics } = buildDimensionGraphics(
             geometry as Polygon,
+            view.resolution,
             view.rotation,
             'Área pública manual',
             'area-publica',
             'manual-public-area',
+            placedFootprints,
           )
           dimensionLayer.addMany(graphics)
           resolve({ area, geometry })
