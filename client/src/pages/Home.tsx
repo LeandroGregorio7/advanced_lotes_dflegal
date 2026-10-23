@@ -130,7 +130,21 @@ const downloadPdfFromJpeg = async (jpegDataUrl: string, filename: string) => {
   setTimeout(() => URL.revokeObjectURL(link.href), 1000)
 }
 
-const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg', dimensions: DimensionItem[], publicAreas: PublicAreaResult[], manualArea: ManualPublicAreaResult | null, lotSelections: SelectedFeature[], occupationSelections: SelectedFeature[]) => {
+const drawDimensionRows = (context: CanvasRenderingContext2D, dimensions: DimensionItem[], x: number, y: number, width: number) => {
+  const grouped = new Map<string, number[]>()
+  dimensions.forEach((dimension) => {
+    grouped.set(dimension.featureTitle, [...(grouped.get(dimension.featureTitle) || []), dimension.length])
+  })
+  let currentY = y
+  for (const [title, lengths] of Array.from(grouped.entries())) {
+    const values = lengths.map((length) => formatMeters(length)).join(' · ')
+    context.fillStyle = '#173C46'
+    currentY = drawWrappedText(context, `${title}: ${values}`, x, currentY, width, 14)
+  }
+  return currentY
+}
+
+const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg', dimensions: DimensionItem[], publicAreaDimensions: DimensionItem[], publicAreas: PublicAreaResult[], manualArea: ManualPublicAreaResult | null, lotSelections: SelectedFeature[], occupationSelections: SelectedFeature[]) => {
   const image = await loadImage(capture.dataUrl)
   const canvas = document.createElement('canvas')
   canvas.width = 2000
@@ -227,11 +241,19 @@ const composeLandscapeBoard = async (capture: MapCapture, format: 'png' | 'jpg',
   for (const item of occupationSelections) { y = drawWrappedText(context, `Ocupação: ${item.title} · ${item.address || 'endereço não informado'} · área ${formatSquareMeters(item.reportedArea)}`, contentX, y, contentWidth, 15) }
   y += 8; context.fillStyle = '#C58A28'; context.fillRect(contentX, y, contentWidth, 2); y += 24
 
-  context.fillStyle = '#173C46'; context.font = '700 17px Arial'; context.fillText('COTAS DOS SEGMENTOS · TODOS OS LOTES', contentX, y); y += 25
-  context.fillStyle = '#526166'; context.font = '11px Arial'
-  if (dimensions.length) for (const dimension of dimensions) { context.fillText(dimension.label, contentX, y); context.fillStyle = '#173C46'; context.font = '700 11px Arial'; context.fillText(formatMeters(dimension.length), contentX + Math.min(490, contentWidth - 90), y); context.fillStyle = '#526166'; context.font = '11px Arial'; y += 16 }
-  else { context.fillText('Nenhuma cota gerada.', contentX, y); y += 18 }
-  y += 8; context.fillStyle = '#B93835'; context.fillRect(contentX, y, contentWidth, 2); y += 24
+  const lotDimensions = dimensions.filter((dimension) => dimension.featureKind === 'lote')
+  const occupationDimensions = dimensions.filter((dimension) => dimension.featureKind === 'ocupacao')
+  const drawDimensionSection = (title: string, items: DimensionItem[]) => {
+    context.fillStyle = '#173C46'; context.font = '700 14px Arial'; context.fillText(title, contentX, y); y += 18
+    context.font = '11px Arial'; context.fillStyle = '#526166'
+    if (items.length) y = drawDimensionRows(context, items, contentX, y, contentWidth)
+    else { context.fillText('Nenhuma cota gerada.', contentX, y); y += 14 }
+    y += 3
+  }
+  drawDimensionSection('COTAS DOS SEGMENTOS · LOTES', lotDimensions)
+  drawDimensionSection('COTAS DOS SEGMENTOS · OCUPAÇÕES', occupationDimensions)
+  drawDimensionSection('COTAS DOS POLÍGONOS HACHURADOS', publicAreaDimensions)
+  y += 5; context.fillStyle = '#B93835'; context.fillRect(contentX, y, contentWidth, 2); y += 18
 
   context.fillStyle = '#B93835'; context.font = '700 17px Arial'; context.fillText('ÁREA PÚBLICA · POR ITEM E CONSOLIDADO', contentX, y); y += 24
   context.fillStyle = '#526166'; context.font = '11px Arial'
@@ -308,6 +330,7 @@ export default function Home() {
   const [searchResults, setSearchResults] = useState<SelectedFeature[]>([])
   const [isSearching, setSearching] = useState(false)
   const [dimensions, setDimensions] = useState<DimensionItem[]>([])
+  const [publicAreaDimensions, setPublicAreaDimensions] = useState<DimensionItem[]>([])
   const [publicArea, setPublicArea] = useState<PublicAreaResult | null>(null)
   const [lotSelections, setLotSelections] = useState<SelectedFeature[]>([])
   const [occupationSelections, setOccupationSelections] = useState<SelectedFeature[]>([])
@@ -346,6 +369,7 @@ export default function Home() {
     setLotSelections([])
     setOccupationSelections([])
     setDimensions([])
+    setPublicAreaDimensions([])
     setPublicArea(null)
     setPublicAreas([])
     setManualPublicArea(null)
@@ -412,17 +436,22 @@ export default function Home() {
     }
   }
 
-  const drawDimensions = () => {
+  const drawDimensions = (kind: FeatureKind) => {
     if (!runtimeRef.current) return
-    if (!lotSelection && !lotSelections.length) {
-      setError('Selecione primeiro um lote da camada “Lotes Registrados”.')
+    const selectedFeatures = kind === 'lote'
+      ? (lotSelections.length ? lotSelections : lotSelection ? [lotSelection] : [])
+      : (occupationSelections.length ? occupationSelections : occupationSelection ? [occupationSelection] : [])
+    if (!selectedFeatures.length) {
+      setError(kind === 'lote'
+        ? 'Selecione primeiro um lote da camada “Lotes Registrados”.'
+        : 'Selecione primeiro uma ocupação da camada “Ocupacoes Identificadas”.')
       return
     }
     try {
       setError('')
-      const nextDimensions = runtimeRef.current.drawDimensions(lotSelections.length ? lotSelections : [lotSelection!])
-      setDimensions(nextDimensions)
-      setStatus(`${nextDimensions.length} segmentos cotados em ${lotSelections.length || 1} lote(s).`)
+      const nextDimensions = runtimeRef.current.drawDimensions(selectedFeatures)
+      setDimensions((current) => [...current.filter((item) => item.featureKind !== kind), ...nextDimensions])
+      setStatus(`${nextDimensions.length} segmentos cotados em ${selectedFeatures.length} ${kind === 'lote' ? 'lote(s)' : 'ocupação(ões)'}.`)
     } catch (dimensionError) {
       setError(dimensionError instanceof Error ? dimensionError.message : 'Não foi possível gerar as cotas.')
     }
@@ -437,11 +466,13 @@ export default function Home() {
     try {
       setError('')
       setStatus(`Calculando a diferença geométrica de ${occupationSelections.length || 1} ocupação(ões)…`)
-      runtimeRef.current.clearGraphics()
+      runtimeRef.current.clearPublicAreaGraphics()
+      setPublicAreaDimensions([])
       const occupations = occupationSelections.length ? occupationSelections : [occupationSelection!]
       const lots = lotSelections.length ? lotSelections : (lotSelection ? [lotSelection] : [])
       const results = await Promise.all(occupations.map((occupation) => runtimeRef.current!.analysePublicArea(occupation, lots)))
       setPublicAreas(results)
+      setPublicAreaDimensions(results.flatMap((item) => item.dimensions))
       setPublicArea(results[results.length - 1] || null)
       setStatus(results.some((item) => item.hasPublicArea) ? `Área pública calculada para ${results.length} ocupação(ões), com hachuras no mapa.` : 'Análise concluída sem área pública hachurada.')
     } catch (analysisError) {
@@ -469,7 +500,7 @@ export default function Home() {
       setExportingImage(true)
       setStatus(`Gerando imagem ${format.toUpperCase()} da área atual do mapa…`)
       const capture = await runtimeRef.current.exportMapImage(format)
-      const dataUrl = await composeLandscapeBoard(capture, format, dimensions, publicAreas, manualPublicArea, lotSelections, occupationSelections)
+      const dataUrl = await composeLandscapeBoard(capture, format, dimensions, publicAreaDimensions, publicAreas, manualPublicArea, lotSelections, occupationSelections)
       const link = document.createElement('a')
       link.href = dataUrl
       link.download = `advanced-lotes-df-legal-${new Date().toISOString().slice(0, 10)}.${format}`
@@ -486,6 +517,7 @@ export default function Home() {
   const clearAnalysis = () => {
     runtimeRef.current?.clearGraphics()
     setDimensions([])
+    setPublicAreaDimensions([])
     setPublicArea(null)
     setPublicAreas([])
     setManualPublicArea(null)
@@ -498,7 +530,7 @@ export default function Home() {
     try {
       setError(''); setPrinting(true); setStatus('Gerando PDF direto no navegador…')
       const capture = await runtimeRef.current.exportMapImage('jpg')
-      const boardDataUrl = await composeLandscapeBoard(capture, 'jpg', dimensions, publicAreas, manualPublicArea, lotSelections, occupationSelections)
+      const boardDataUrl = await composeLandscapeBoard(capture, 'jpg', dimensions, publicAreaDimensions, publicAreas, manualPublicArea, lotSelections, occupationSelections)
       await downloadPdfFromJpeg(boardDataUrl, `advanced-lotes-df-legal-${new Date().toISOString().slice(0, 10)}.pdf`)
       setStatus('PDF baixado diretamente, sem usar o serviço de impressão.')
     } catch (pdfError) {
@@ -569,9 +601,13 @@ export default function Home() {
                 </div>
               )}
             </div>
-            <Button onClick={drawDimensions} disabled={!mapIsLoaded || !(lotSelections.length || lotSelection)} className="tool-button tool-button-dimension">
+            <Button onClick={() => drawDimensions('lote')} disabled={!mapIsLoaded || !(lotSelections.length || lotSelection)} className="tool-button tool-button-dimension">
               <Ruler size={18} strokeWidth={1.8} />
-              <span><strong>Cotar segmentos</strong><small>Desenha cada medida do lote</small></span>
+              <span><strong>Cotar segmentos dos lotes</strong><small>Exibe os valores de cada lado</small></span>
+            </Button>
+            <Button onClick={() => drawDimensions('ocupacao')} disabled={!mapIsLoaded || !(occupationSelections.length || occupationSelection)} className="tool-button tool-button-dimension">
+              <Ruler size={18} strokeWidth={1.8} />
+              <span><strong>Cotar segmentos das ocupações</strong><small>Exibe os valores de cada lado</small></span>
             </Button>
             <Button onClick={analysePublicArea} disabled={!mapIsLoaded || !(occupationSelections.length || occupationSelection)} className="tool-button tool-button-alert">
               <AlertTriangle size={18} strokeWidth={1.8} />
@@ -646,7 +682,7 @@ export default function Home() {
           </div>
         )}
 
-        {(dimensions.length > 0 || publicAreas.length > 0 || manualPublicArea) && (
+        {(dimensions.length > 0 || publicAreaDimensions.length > 0 || publicAreas.length > 0 || manualPublicArea) && (
           <aside className="analysis-panel">
             <div className="analysis-panel-texture" style={{ backgroundImage: 'url(/manus-storage/parcel-analysis-texture_08b98a22.jpg)' }} />
             <div className="analysis-panel-content">
@@ -655,7 +691,15 @@ export default function Home() {
                 <section>
                   <div className="result-heading"><Ruler size={16} /> <span>{dimensions.length} segmentos cotados</span></div>
                   <div className="dimension-list">
-                    {dimensions.map((dimension) => <div key={dimension.label}><span>{dimension.label}</span><strong>{formatMeters(dimension.length)}</strong></div>)}
+                    {dimensions.map((dimension) => <div key={`${dimension.featureKind}-${dimension.featureTitle}-${dimension.segment}`}><span>{dimension.featureTitle} · {dimension.segment}</span><strong>{formatMeters(dimension.length)}</strong></div>)}
+                  </div>
+                </section>
+              )}
+              {publicAreaDimensions.length > 0 && (
+                <section>
+                  <div className="result-heading"><Ruler size={16} /> <span>COTAS DOS POLÍGONOS HACHURADOS</span></div>
+                  <div className="dimension-list">
+                    {publicAreaDimensions.map((dimension) => <div key={`${dimension.featureTitle}-${dimension.segment}`}><span>{dimension.featureTitle} · {dimension.segment}</span><strong>{formatMeters(dimension.length)}</strong></div>)}
                   </div>
                 </section>
               )}
