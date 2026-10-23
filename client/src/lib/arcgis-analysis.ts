@@ -166,6 +166,55 @@ const normalizedRing = (ring: number[][]) => {
   return vertices
 }
 
+/**
+ * Simplifica polígonos com excesso de micro-segmentos (comum em ocupações digitalizadas à mão),
+ * fundindo arestas colineares para gerar apenas os vetores reais de direção.
+ */
+const simplifyPolygonRing = (ring: number[][], minSegmentLength: number = 1.5): number[][] => {
+  const cleanVertices = normalizedRing(ring)
+  if (cleanVertices.length <= 4) return cleanVertices
+
+  const simplified: number[][] = [cleanVertices[0]]
+  let currentStart = cleanVertices[0]
+
+  for (let i = 1; i < cleanVertices.length; i++) {
+    const nextPt = cleanVertices[i]
+    const segmentLength = Math.hypot(nextPt[0] - currentStart[0], nextPt[1] - currentStart[1])
+
+    if (segmentLength < minSegmentLength && i < cleanVertices.length - 1) {
+      // Ignora micro-vértice colinear intermediário
+      continue
+    }
+
+    // Verifica se a direção é praticamente a mesma do segmento anterior para fundir
+    if (simplified.length >= 2) {
+      const prevStart = simplified[simplified.length - 2]
+      const prevEnd = simplified[simplified.length - 1]
+      const vPrevAngle = Math.atan2(prevEnd[1] - prevStart[1], prevEnd[0] - prevStart[0])
+      const vCurrAngle = Math.atan2(nextPt[1] - prevEnd[1], nextPt[0] - prevEnd[0])
+      let angleDiff = Math.abs(vPrevAngle - vCurrAngle) * (180 / Math.PI)
+      if (angleDiff > 180) angleDiff = 360 - angleDiff
+
+      if (angleDiff < 4.0) {
+        // Substitui o ponto final anterior pelo novo ponto estendido
+        simplified[simplified.length - 1] = nextPt
+        currentStart = nextPt
+        continue
+      }
+    }
+
+    simplified.push(nextPt)
+    currentStart = nextPt
+  }
+
+  // Fecha o anel se necessário
+  if (simplified.length > 2 && !sameVertex(simplified[0], simplified[simplified.length - 1])) {
+    simplified.push([...simplified[0]])
+  }
+
+  return simplified.length >= 4 ? simplified : cleanVertices
+}
+
 const makeSelection = (
   kind: FeatureKind,
   graphic: Graphic,
@@ -227,23 +276,6 @@ const footprintsCollide = (a: PlacedLabelFootprint, b: PlacedLabelFootprint): bo
   return false
 }
 
-const minClearanceToExisting = (
-  candidate: PlacedLabelFootprint,
-  existing: PlacedLabelFootprint[],
-): number => {
-  if (!existing.length) return Number.POSITIVE_INFINITY
-  let minClearance = Number.POSITIVE_INFINITY
-  for (const item of existing) {
-    for (const sa of candidate.samples) {
-      for (const sb of item.samples) {
-        const dist = Math.hypot(sa.x - sb.x, sa.y - sb.y) - (candidate.radius + item.radius)
-        if (dist < minClearance) minClearance = dist
-      }
-    }
-  }
-  return minClearance
-}
-
 const extractExistingFootprints = (
   dimensionLayer: GraphicsLayer,
   viewResolution: number,
@@ -276,7 +308,13 @@ const buildDimensionGraphics = (
     throw new Error('O polígono selecionado não possui vértices suficientes para cotagem.')
   }
 
-  const vertices = normalizedRing(outerRing)
+  // Se for ocupação ou área pública, aplica simplificação para eliminar micro-segmentos
+  const rawVertices = normalizedRing(outerRing)
+  const vertices =
+    featureKind === 'ocupacao' || featureKind === 'area-publica'
+      ? simplifyPolygonRing(rawVertices, 2.5)
+      : rawVertices
+
   if (vertices.length < 3) {
     throw new Error('O polígono selecionado não possui segmentos válidos para cotagem.')
   }
@@ -287,15 +325,15 @@ const buildDimensionGraphics = (
   const graphics: Graphic[] = []
   const dimensions: DimensionItem[] = []
 
-  for (let index = 0; index < vertices.length; index += 1) {
+  for (let index = 0; index < vertices.length - 1; index += 1) {
     const start = vertices[index]
-    const end = vertices[(index + 1) % vertices.length]
+    const end = vertices[index + 1]
     const segmentLine = new Polyline({
       spatialReference: polygon.spatialReference,
       paths: [[start, end]],
     })
     const length = geometryEngine.geodesicLength(segmentLine, 'meters') || 0
-    if (length < 0.01) continue
+    if (length < 0.5) continue // Ignora segmentos irrelevantes menores que 50cm
 
     const segment = index + 1
     const text = `${length.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
@@ -313,11 +351,9 @@ const buildDimensionGraphics = (
     const planarLength = Math.hypot(dx, dy)
     if (!planarLength) continue
 
-    // Vetor unitário ao longo da aresta (tangente)
     const ux = dx / planarLength
     const uy = dy / planarLength
 
-    // Vetor normal apontando para fora do polígono
     let nx = -uy
     let ny = ux
     const midX = (start[0] + end[0]) / 2
@@ -331,75 +367,40 @@ const buildDimensionGraphics = (
       }
     }
 
-    // Ângulo corrigido para acompanhar a direção de cada lado no ArcGIS TextSymbol
     const angle = normalizeAngle((-(Math.atan2(dy, dx) * 180) / Math.PI) + (viewRotation || 0))
 
-    // Dimensões aproximadas da caixa de texto em unidades do mapa
     const halfWidth = Math.max(text.length * 3.4, 18) * res
     const halfHeight = 7.5 * res
 
-    // Posições candidatas ao longo da aresta (mantém na aresta se possível)
-    const canSlideAlongEdge = planarLength > halfWidth * 2.6
-    const tCandidates = canSlideAlongEdge ? [0.5, 0.32, 0.68, 0.22, 0.78] : [0.5]
-
-    // Se houver colisão inevitável na aresta (ex.: aresta compartilhada entre Lote e Ocupação),
-    // desloca levemente o Lote para dentro (-1) e a Ocupação/Área Pública para fora (+1)
     const preferredNormalSign = featureKind === 'lote' ? -1 : 1
-    const step = 13 * res
-    const normalOffsets = [
-      0,
-      preferredNormalSign * step,
-      -preferredNormalSign * step,
-      preferredNormalSign * step * 1.85,
-      -preferredNormalSign * step * 1.85,
-    ]
+    const step = 14 * res
+    const normalOffsets = [0, preferredNormalSign * step, -preferredNormalSign * step, preferredNormalSign * step * 2]
 
     let chosenX = midX
     let chosenY = midY
     let chosenFootprint = createLabelFootprint(midX, midY, ux, uy, halfWidth, halfHeight)
     let foundCollisionFree = false
-    let bestClearance = Number.NEGATIVE_INFINITY
 
     for (const normalOffset of normalOffsets) {
-      for (const t of tCandidates) {
-        const candX = start[0] + dx * t + nx * normalOffset
-        const candY = start[1] + dy * t + ny * normalOffset
-        const candFootprint = createLabelFootprint(candX, candY, ux, uy, halfWidth, halfHeight)
+      const candX = midX + nx * normalOffset
+      const candY = midY + ny * normalOffset
+      const candFootprint = createLabelFootprint(candX, candY, ux, uy, halfWidth, halfHeight)
 
-        const hasCollision = placedFootprints.some((existing) =>
-          footprintsCollide(candFootprint, existing),
-        )
-
-        if (!hasCollision) {
-          chosenX = candX
-          chosenY = candY
-          chosenFootprint = candFootprint
-          foundCollisionFree = true
-          break
-        }
-
-        const clearance = minClearanceToExisting(candFootprint, placedFootprints)
-        if (clearance > bestClearance) {
-          bestClearance = clearance
-          chosenX = candX
-          chosenY = candY
-          chosenFootprint = candFootprint
-        }
+      const hasCollision = placedFootprints.some((existing) => footprintsCollide(candFootprint, existing))
+      if (!hasCollision) {
+        chosenX = candX
+        chosenY = candY
+        chosenFootprint = candFootprint
+        foundCollisionFree = true
+        break
       }
-      if (foundCollisionFree) break
     }
 
     placedFootprints.push(chosenFootprint)
 
-    const labelPoint = new Point({
-      x: chosenX,
-      y: chosenY,
-      spatialReference: polygon.spatialReference,
-    })
-
     graphics.push(
       new Graphic({
-        geometry: labelPoint,
+        geometry: new Point({ x: chosenX, y: chosenY, spatialReference: polygon.spatialReference }),
         symbol: new TextSymbol({
           text,
           color: colorStyle.text,
@@ -412,14 +413,7 @@ const buildDimensionGraphics = (
           verticalAlignment: 'middle',
           font: { family: 'Source Sans 3', size: 10, weight: 'bold' },
         }),
-        attributes: {
-          ...dimensionAttributes,
-          analysisType: 'dimension-label',
-          ux,
-          uy,
-          halfWidth,
-          halfHeight,
-        },
+        attributes: { ...dimensionAttributes, analysisType: 'dimension-label', ux, uy, halfWidth, halfHeight },
       }),
     )
     dimensions.push({ featureTitle, featureKind, segment, length })
@@ -509,7 +503,6 @@ export async function createAnalysisRuntime(
   const occupationLayer = findFeatureLayer(webmap, settings.occupationLayerTitle)
   if (!lotLayer || !occupationLayer) {
     const available = webmap.allLayers
-      .toArray()
       .map((layer) => layer.title)
       .filter(Boolean)
       .join(' | ')
@@ -616,7 +609,6 @@ export async function createAnalysisRuntime(
         .filter((graphic) => groups.has(String(graphic.attributes?.dimensionGroup || '')))
         .forEach((graphic) => dimensionLayer.remove(graphic))
 
-      // Carrega as posições das cotas já ativas no mapa (ex.: lotes já cotados) para evitar colisão
       const placedFootprints = extractExistingFootprints(dimensionLayer, view.resolution)
 
       features.forEach((feature, featureIndex) => {
