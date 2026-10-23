@@ -175,13 +175,15 @@ const ensurePolygon = (graphic: Graphic, layerLabel: string) => {
 const findFeatureLayer = (webmap: WebMap, title: string) =>
   webmap.allLayers.find((layer) => layer.type === 'feature' && layer.title === title) as FeatureLayer | undefined
 
-const buildDimensionGraphics = (polygon: Polygon, featureTitle: string, featureKind: FeatureKind | 'area-publica', dimensionGroup: string) => {
+const buildDimensionGraphics = (polygon: Polygon, viewResolution: number, featureTitle: string, featureKind: FeatureKind | 'area-publica', dimensionGroup: string) => {
   const outerRing = polygon.rings[0]
   if (!outerRing || outerRing.length < 3) throw new Error('O lote selecionado não possui vértices suficientes para cotagem.')
 
   const vertices = normalizedRing(outerRing)
   if (vertices.length < 3) throw new Error('O lote selecionado não possui segmentos válidos para cotagem.')
 
+  const centroid = polygon.centroid
+  const labelOffset = Math.max(0.25, viewResolution * 8)
   const graphics: Graphic[] = []
   const dimensions: DimensionItem[] = []
 
@@ -208,11 +210,40 @@ const buildDimensionGraphics = (polygon: Polygon, featureTitle: string, featureK
       y: (start[1] + end[1]) / 2,
       spatialReference: polygon.spatialReference,
     })
+    let normalX = -dy / planarLength
+    let normalY = dx / planarLength
+    const probeDistance = Math.max(0.01, Math.min(viewResolution * 2, labelOffset * 0.25))
+    const positiveProbe = new Point({
+      x: midpoint.x + normalX * probeDistance,
+      y: midpoint.y + normalY * probeDistance,
+      spatialReference: polygon.spatialReference,
+    })
+    const negativeProbe = new Point({
+      x: midpoint.x - normalX * probeDistance,
+      y: midpoint.y - normalY * probeDistance,
+      spatialReference: polygon.spatialReference,
+    })
+    const positiveIsInside = geometryEngine.contains(polygon, positiveProbe)
+    const negativeIsInside = geometryEngine.contains(polygon, negativeProbe)
+    const centroidPointsInward = centroid
+      ? (midpoint.x - centroid.x) * normalX + (midpoint.y - centroid.y) * normalY < 0
+      : false
+    const shouldFlipNormal = positiveIsInside && !negativeIsInside
+      || (positiveIsInside === negativeIsInside && centroidPointsInward)
+    if (shouldFlipNormal) {
+      normalX *= -1
+      normalY *= -1
+    }
+    const labelPoint = new Point({
+      x: midpoint.x + normalX * labelOffset,
+      y: midpoint.y + normalY * labelOffset,
+      spatialReference: polygon.spatialReference,
+    })
     graphics.push(new Graphic({
-      geometry: midpoint,
+      geometry: labelPoint,
       symbol: new TextSymbol({
         text,
-        color: '#00AEEF',
+        color: '#000000',
         haloColor: '#FFFFFF',
         haloSize: 2.8,
         angle,
@@ -382,7 +413,7 @@ export async function createAnalysisRuntime(
         const label = feature.kind === 'lote' ? `O lote ${featureIndex + 1}` : `A ocupação ${featureIndex + 1}`
         const polygon = ensurePolygon(feature.graphic, label)
         const dimensionGroup = `segments:${feature.kind}`
-        const { graphics, dimensions } = buildDimensionGraphics(polygon, feature.title, feature.kind, dimensionGroup)
+        const { graphics, dimensions } = buildDimensionGraphics(polygon, view.resolution, feature.title, feature.kind, dimensionGroup)
         dimensionLayer.addMany(graphics)
         allDimensions.push(...dimensions)
       })
@@ -446,6 +477,7 @@ export async function createAnalysisRuntime(
         if (hachGeometry.type === 'polygon') {
           const { graphics, dimensions: polygonDimensions } = buildDimensionGraphics(
             hachGeometry as Polygon,
+            view.resolution,
             occupation.title,
             'area-publica',
             'public-area',
