@@ -1,510 +1,661 @@
-import Graphic from "@arcgis/core/Graphic";
-import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
-import Polygon from "@arcgis/core/geometry/Polygon";
-import Polyline from "@arcgis/core/geometry/Polyline";
-import Point from "@arcgis/core/geometry/Point";
-import * as geometryEngine from "@arcgis/core/geometry/geometryEngine";
-import * as webMercatorUtils from "@arcgis/core/geometry/support/webMercatorUtils";
-import type MapView from "@arcgis/core/views/MapView";
-
-export type FeatureCategory = "lote" | "ocupacao" | "area_publica";
-
-export interface SegmentDimension {
-  id: string;
-  featureId: string | number;
-  featureLabel: string;
-  category: FeatureCategory;
-  segmentIndex: number;
-  lengthMeters: number;
-  formattedLength: string;
-  midpoint: Point;
-  p1: Point;
-  p2: Point;
-  arcgisAngleDeg: number;
-}
-
-export interface AnalysisSessionSummary {
-  totalSegments: number;
-  lotesCount: number;
-  ocupacoesCount: number;
-  publicAreaSqMeters: number;
-  segments: SegmentDimension[];
-}
-
 /**
- * Cores e estilos padronizados (Fonte Azul com Halo Branco sobre as arestas)
+ * Carta Técnica Operacional: integra o MapView com operações cartográficas
+ * explícitas. Azul = cotas e referências, vermelho = área pública.
  */
-const DIMENSION_TEXT_COLOR: [number, number, number, number] = [0, 112, 255, 1]; // Azul (#0070FF)
-const DIMENSION_HALO_COLOR: [number, number, number, number] = [255, 255, 255, 0.96];
-const DIMENSION_FONT_SIZE = 10;
+import Graphic from '@arcgis/core/Graphic'
+import WebMap from '@arcgis/core/WebMap'
+import Portal from '@arcgis/core/portal/Portal'
+import MapView from '@arcgis/core/views/MapView'
+import FeatureLayer from '@arcgis/core/layers/FeatureLayer'
+import GraphicsLayer from '@arcgis/core/layers/GraphicsLayer'
+import Point from '@arcgis/core/geometry/Point'
+import Polygon from '@arcgis/core/geometry/Polygon'
+import Polyline from '@arcgis/core/geometry/Polyline'
+import * as geometryEngine from '@arcgis/core/geometry/geometryEngine'
+import * as webMercatorUtils from '@arcgis/core/geometry/support/webMercatorUtils'
+import SimpleFillSymbol from '@arcgis/core/symbols/SimpleFillSymbol'
+import SimpleLineSymbol from '@arcgis/core/symbols/SimpleLineSymbol'
+import SketchViewModel from '@arcgis/core/widgets/Sketch/SketchViewModel'
+import TextSymbol from '@arcgis/core/symbols/TextSymbol'
+import PrintTemplate from '@arcgis/core/rest/support/PrintTemplate'
+import PrintParameters from '@arcgis/core/rest/support/PrintParameters'
+import * as print from '@arcgis/core/rest/print'
+import OAuthInfo from '@arcgis/core/identity/OAuthInfo'
+import esriId from '@arcgis/core/identity/IdentityManager'
 
-const POLYGON_STYLES: Record<
-  FeatureCategory,
-  {
-    fillColor: [number, number, number, number];
-    outlineColor: [number, number, number, number];
-    outlineWidth: number;
-    style: "solid" | "backward-diagonal" | "diagonal-cross";
+export type FeatureKind = 'lote' | 'ocupacao'
+
+export async function ensurePortalCredential(portalUrl: string, clientId: string) {
+  const cleanPortalUrl = portalUrl.replace(/\/$/, '')
+  const oauthInfo = new OAuthInfo({
+    appId: clientId,
+    portalUrl: cleanPortalUrl,
+    flowType: 'authorization-code',
+    popup: false,
+  })
+  esriId.registerOAuthInfos([oauthInfo])
+  return esriId.getCredential(`${cleanPortalUrl}/sharing`, { oAuthPopupConfirmation: false })
+}
+
+export interface AppMapSettings {
+  portalUrl: string
+  webMapId: string
+  lotLayerTitle: string
+  occupationLayerTitle: string
+  lotAreaField: string
+  occupationAreaField: string
+  printServiceUrl: string
+  layoutName: string
+}
+
+export interface SelectedFeature {
+  kind: FeatureKind
+  graphic: Graphic
+  title: string
+  reportedArea: number
+  address?: string
+}
+
+export interface DimensionItem {
+  featureTitle: string
+  featureKind: FeatureKind | 'area-publica'
+  segment: number
+  length: number
+}
+
+export interface MapCapture {
+  dataUrl: string
+  extent: { xmin: number; ymin: number; xmax: number; ymax: number }
+  geographicExtent: { xmin: number; ymin: number; xmax: number; ymax: number }
+  spatialReference: { wkid?: number; latestWkid?: number; wkt?: string }
+  scale: number
+  zoom: number
+}
+
+export interface PublicAreaResult {
+  lot: SelectedFeature
+  occupation: SelectedFeature
+  reportedLotArea: number
+  reportedOccupationArea: number
+  numericalExcess: number
+  geometricPublicArea: number
+  hasPublicArea: boolean
+  dimensions: DimensionItem[]
+  note: string
+}
+
+export interface ManualPublicAreaResult {
+  area: number
+  geometry: __esri.Geometry
+}
+
+export interface AnalysisRuntime {
+  view: MapView
+  layerTitles: string[]
+  setSelectionMode: (mode: FeatureKind) => void
+  searchFeatures: (mode: FeatureKind, searchText: string) => Promise<SelectedFeature[]>
+  selectFeature: (selection: SelectedFeature, zoomToFeature?: boolean) => Promise<void>
+  drawDimensions: (features: SelectedFeature[]) => DimensionItem[]
+  clearPublicAreaGraphics: () => void
+  analysePublicArea: (ocupacao: SelectedFeature, preferredLots?: SelectedFeature[]) => Promise<PublicAreaResult>
+  drawManualPublicArea: () => Promise<ManualPublicAreaResult>
+  clearGraphics: () => void
+  printAnalysis: (settings: AppMapSettings, title: string, analysisText: string, selectionText: string) => Promise<string>
+  exportMapImage: (format: 'png' | 'jpg') => Promise<MapCapture>
+  destroy: () => void
+}
+
+const dimensionBlueColor = '#0066FF'
+
+const numberFromValue = (value: unknown) => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+  if (typeof value === 'string') {
+    const normalized = value.replace(/\./g, '').replace(',', '.')
+    const parsed = Number(normalized)
+    return Number.isFinite(parsed) ? parsed : 0
   }
-> = {
-  lote: {
-    fillColor: [255, 235, 59, 0.28],
-    outlineColor: [0, 212, 255, 1], // Contorno ciano
-    outlineWidth: 2.2,
-    style: "solid",
-  },
-  ocupacao: {
-    fillColor: [0, 180, 255, 0.25],
-    outlineColor: [0, 112, 255, 1], // Contorno azul
-    outlineWidth: 2,
-    style: "solid",
-  },
-  area_publica: {
-    fillColor: [255, 87, 34, 0.45],
-    outlineColor: [255, 87, 34, 1],
-    outlineWidth: 2,
-    style: "backward-diagonal", // Polígono hachurado
-  },
-};
-
-/**
- * Formata valores em metros no padrão PT-BR (ex: "48,46 m")
- */
-export function formatMeters(value: number): string {
-  return `${value.toFixed(2).replace(".", ",")} m`;
+  return 0
 }
 
-/**
- * Formata valores de área em m² (ex: "1.405,90 m²")
- */
-export function formatArea(value: number): string {
-  return `${value.toLocaleString("pt-BR", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })} m²`;
+type GeometryResult = __esri.Geometry | __esri.Geometry[] | null | undefined
+
+const geodesicArea = (geometry: GeometryResult): number => {
+  if (!geometry) return 0
+  if (Array.isArray(geometry)) return geometry.reduce((total, part) => total + geodesicArea(part), 0)
+  if (geometry.type !== 'polygon') return 0
+  return Math.abs(geometryEngine.geodesicArea(geometry as Polygon, 'square-meters') || 0)
 }
 
-/**
- * Converte coordenadas geográficas (WGS84/SIRGAS) para métrica planar se necessário
- * para garantir cálculo trigonométrico exato do ângulo em tela.
- */
-function toPlanarXY(point: Point): { x: number; y: number } {
-  if (point.spatialReference?.isWGS84 || point.spatialReference?.wkid === 4326 || point.spatialReference?.wkid === 4674) {
-    const [x, y] = webMercatorUtils.lngLatToXY(point.longitude ?? point.x, point.latitude ?? point.y);
-    return { x, y };
+const firstGeometry = (geometry: GeometryResult) => (Array.isArray(geometry) ? geometry[0] : geometry)
+
+const reportedOrGeometricArea = (graphic: Graphic, fieldName: string) => {
+  const reported = numberFromValue(graphic.attributes?.[fieldName])
+  return reported > 0 ? reported : geodesicArea(graphic.geometry)
+}
+
+const featureTitle = (layer: FeatureLayer, graphic: Graphic) => {
+  const objectId = graphic.attributes?.[layer.objectIdField]
+  return `${layer.title}${objectId === undefined || objectId === null ? '' : ` · ${objectId}`}`
+}
+
+const normalizeAngle = (angle: number) => {
+  let normalized = ((angle + 180) % 360 + 360) % 360 - 180
+  if (normalized > 90) normalized -= 180
+  if (normalized < -90) normalized += 180
+  return normalized
+}
+
+const sameVertex = (first: number[], second: number[]) =>
+  Math.abs(first[0] - second[0]) < 0.000001 && Math.abs(first[1] - second[1]) < 0.000001
+
+const normalizedRing = (ring: number[][]) => {
+  const vertices: number[][] = []
+  for (const vertex of ring) {
+    if (!vertices.length || !sameVertex(vertices[vertices.length - 1], vertex)) vertices.push(vertex)
   }
-  return { x: point.x, y: point.y };
+  while (vertices.length > 1 && sameVertex(vertices[0], vertices[vertices.length - 1])) vertices.pop()
+  return vertices
 }
 
-/**
- * Calcula o ângulo exato da aresta para o ArcGIS TextSymbol.
- * IMPORTANTE:
- * - No mapa, o eixo Y cresce para CIMA (Norte), logo atan2(dy, dx) é anti-horário.
- * - No ArcGIS TextSymbol.angle, a rotação é HORÁRIA.
- * - Por isso invertemos o sinal (-Math.atan2), alinhando o texto exatamente sobre a aresta.
- */
-export function calculateEdgeAngle(
-  p1: Point,
-  p2: Point,
-  view?: MapView
-): { arcgisAngleDeg: number; canvasAngleRad: number } {
-  // Se o MapView estiver disponível, usa coordenadas de ecrã para precisão absoluta mesmo com rotação do mapa
-  if (view) {
-    const s1 = view.toScreen(p1);
-    const s2 = view.toScreen(p2);
-    if (s1 && s2) {
-      const dxScreen = s2.x - s1.x;
-      const dyScreen = s2.y - s1.y; // No ecrã, Y já cresce para baixo (sentido horário)
-      let deg = (Math.atan2(dyScreen, dxScreen) * 180) / Math.PI;
-      if (deg > 90) deg -= 180;
-      if (deg < -90) deg += 180;
-      return {
-        arcgisAngleDeg: deg,
-        canvasAngleRad: (deg * Math.PI) / 180,
-      };
+const makeSelection = (
+  kind: FeatureKind,
+  graphic: Graphic,
+  layer: FeatureLayer,
+  settings: AppMapSettings,
+  addressField?: string,
+): SelectedFeature => ({
+  kind,
+  graphic,
+  title: featureTitle(layer, graphic),
+  reportedArea: reportedOrGeometricArea(
+    graphic,
+    kind === 'lote' ? settings.lotAreaField : settings.occupationAreaField,
+  ),
+  address: addressField ? String(graphic.attributes?.[addressField] ?? '').trim() || undefined : undefined,
+})
+
+const ensurePolygon = (graphic: Graphic, layerLabel: string) => {
+  if (!graphic.geometry || graphic.geometry.type !== 'polygon') {
+    throw new Error(`${layerLabel} não possui uma geometria poligonal disponível.`)
+  }
+  return graphic.geometry as Polygon
+}
+
+const findFeatureLayer = (webmap: WebMap, title: string) =>
+  webmap.allLayers.find((layer) => layer.type === 'feature' && layer.title === title) as FeatureLayer | undefined
+
+const buildDimensionGraphics = (
+  polygon: Polygon,
+  viewRotation: number,
+  featureTitle: string,
+  featureKind: FeatureKind | 'area-publica',
+  dimensionGroup: string,
+) => {
+  const outerRing = polygon.rings[0]
+  if (!outerRing || outerRing.length < 3) {
+    throw new Error('O polígono selecionado não possui vértices suficientes para cotagem.')
+  }
+
+  const vertices = normalizedRing(outerRing)
+  if (vertices.length < 3) {
+    throw new Error('O polígono selecionado não possui segmentos válidos para cotagem.')
+  }
+
+  const graphics: Graphic[] = []
+  const dimensions: DimensionItem[] = []
+
+  for (let index = 0; index < vertices.length; index += 1) {
+    const start = vertices[index]
+    const end = vertices[(index + 1) % vertices.length]
+    const segmentLine = new Polyline({
+      spatialReference: polygon.spatialReference,
+      paths: [[start, end]],
+    })
+    const length = geometryEngine.geodesicLength(segmentLine, 'meters') || 0
+    if (length < 0.01) continue
+
+    const segment = index + 1
+    const text = `${length.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
+    const dimensionAttributes = {
+      analysisType: 'dimension',
+      dimensionGroup,
+      featureTitle,
+      featureKind,
+      segment,
+      lengthMeters: length,
     }
-  }
 
-  const c1 = toPlanarXY(p1);
-  const c2 = toPlanarXY(p2);
-  const dx = c2.x - c1.x;
-  const dy = c2.y - c1.y;
+    const dx = end[0] - start[0]
+    const dy = end[1] - start[1]
+    const planarLength = Math.hypot(dx, dy)
+    if (!planarLength) continue
 
-  // Sinal negativo corrige o espelhamento entre eixo Y cartográfico e rotação horária do texto
-  let angleDeg = (-Math.atan2(dy, dx) * 180) / Math.PI;
+    // O TextSymbol do ArcGIS rotaciona no sentido horário (eixo Y de tela para baixo),
+    // enquanto as coordenadas do mapa têm eixo Y para cima (Norte).
+    // Por isso invertemos o sinal de atan2(dy, dx) para alinhar exatamente com a aresta.
+    const angle = normalizeAngle((-(Math.atan2(dy, dx) * 180) / Math.PI) + (viewRotation || 0))
 
-  // Mantém a cota sempre de cabeça para cima (legível da esquerda para a direita)
-  if (angleDeg > 90) angleDeg -= 180;
-  if (angleDeg < -90) angleDeg += 180;
+    // Posiciona a cota diretamente sobre o ponto médio da aresta do polígono
+    const midpoint = new Point({
+      x: (start[0] + end[0]) / 2,
+      y: (start[1] + end[1]) / 2,
+      spatialReference: polygon.spatialReference,
+    })
 
-  return {
-    arcgisAngleDeg: angleDeg,
-    canvasAngleRad: (angleDeg * Math.PI) / 180,
-  };
-}
-
-/**
- * Calcula o comprimento geodésico ou planar de um segmento em metros
- */
-export function calculateSegmentLengthMeters(p1: Point, p2: Point): number {
-  const segmentLine = new Polyline({
-    paths: [
-      [
-        [p1.x, p1.y],
-        [p2.x, p2.y],
-      ],
-    ],
-    spatialReference: p1.spatialReference,
-  });
-
-  const sr = p1.spatialReference;
-  if (sr?.isWGS84 || sr?.isWebMercator || sr?.wkid === 4326 || sr?.wkid === 4674 || sr?.wkid === 3857) {
-    return Math.abs(geometryEngine.geodesicLength(segmentLine, "meters"));
-  }
-  return Math.abs(geometryEngine.planarLength(segmentLine, "meters"));
-}
-
-/**
- * Cria o símbolo de polígono conforme a categoria (Lote, Ocupação ou Área Pública hachurada)
- */
-export function createPolygonGraphic(
-  polygon: Polygon,
-  category: FeatureCategory,
-  attributes: Record<string, any> = {}
-): Graphic {
-  const styleCfg = POLYGON_STYLES[category];
-
-  return new Graphic({
-    geometry: polygon,
-    attributes: {
-      ...attributes,
-      analysisCategory: category,
-      isPolygonGraphic: true,
-    },
-    symbol: {
-      type: "simple-fill",
-      color: styleCfg.fillColor,
-      style: styleCfg.style,
-      outline: {
-        color: styleCfg.outlineColor,
-        width: styleCfg.outlineWidth,
-      },
-    } as any,
-  });
-}
-
-/**
- * Gera os gráficos de cotas (em azul, sobre as arestas, seguindo a direção do lado)
- * para qualquer polígono (Lotes, Ocupações Identificadas e Áreas Públicas Hachuradas).
- * Nenhuma linha dourada deslocada é gerada.
- */
-export function createPolygonDimensionGraphics(
-  polygon: Polygon,
-  options: {
-    featureId: string | number;
-    featureLabel: string;
-    category: FeatureCategory;
-    view?: MapView;
-    minSegmentLengthMeters?: number;
-  }
-): { graphics: Graphic[]; dimensions: SegmentDimension[] } {
-  const {
-    featureId,
-    featureLabel,
-    category,
-    view,
-    minSegmentLengthMeters = 0.25,
-  } = options;
-
-  const graphics: Graphic[] = [];
-  const dimensions: SegmentDimension[] = [];
-
-  if (!polygon?.rings?.length) {
-    return { graphics, dimensions };
-  }
-
-  let segmentCounter = 0;
-
-  for (const ring of polygon.rings) {
-    for (let i = 0; i < ring.length - 1; i++) {
-      const coord1 = ring[i];
-      const coord2 = ring[i + 1];
-
-      const p1 = new Point({
-        x: coord1[0],
-        y: coord1[1],
-        spatialReference: polygon.spatialReference,
-      });
-
-      const p2 = new Point({
-        x: coord2[0],
-        y: coord2[1],
-        spatialReference: polygon.spatialReference,
-      });
-
-      const lengthMeters = calculateSegmentLengthMeters(p1, p2);
-      if (lengthMeters < minSegmentLengthMeters) continue;
-
-      segmentCounter += 1;
-
-      // Ponto médio exato sobre a aresta do polígono
-      const midpoint = new Point({
-        x: (p1.x + p2.x) / 2,
-        y: (p1.y + p2.y) / 2,
-        spatialReference: polygon.spatialReference,
-      });
-
-      const { arcgisAngleDeg } = calculateEdgeAngle(p1, p2, view);
-      const formattedLength = formatMeters(lengthMeters);
-
-      const dimension: SegmentDimension = {
-        id: `${category}-${featureId}-seg-${segmentCounter}`,
-        featureId,
-        featureLabel,
-        category,
-        segmentIndex: segmentCounter,
-        lengthMeters,
-        formattedLength,
-        midpoint,
-        p1,
-        p2,
-        arcgisAngleDeg,
-      };
-
-      dimensions.push(dimension);
-
-      // Apenas o rótulo em azul diretamente sobre a aresta (sem linhas douradas extras)
-      const labelGraphic = new Graphic({
+    graphics.push(
+      new Graphic({
         geometry: midpoint,
-        attributes: {
-          ...dimension,
-          isDimensionLabel: true,
-        },
-        symbol: {
-          type: "text",
-          color: DIMENSION_TEXT_COLOR, // Azul (#0070FF)
-          haloColor: DIMENSION_HALO_COLOR, // Halo branco para leitura limpa sobre a linha ciano/azul
-          haloSize: 2,
-          text: formattedLength,
+        symbol: new TextSymbol({
+          text,
+          color: dimensionBlueColor,
+          haloColor: '#FFFFFF',
+          haloSize: 2.5,
+          angle,
           xoffset: 0,
           yoffset: 0,
-          angle: arcgisAngleDeg,
-          horizontalAlignment: "center",
-          verticalAlignment: "middle",
-          font: {
-            size: DIMENSION_FONT_SIZE,
-            family: "Arial, sans-serif",
-            weight: "bold",
-          },
-        } as any,
-      });
-
-      graphics.push(labelGraphic);
-    }
+          horizontalAlignment: 'center',
+          verticalAlignment: 'middle',
+          font: { family: 'Source Sans 3', size: 10, weight: 'bold' },
+        }),
+        attributes: { ...dimensionAttributes, analysisType: 'dimension-label' },
+      }),
+    )
+    dimensions.push({ featureTitle, featureKind, segment, length })
   }
 
-  return { graphics, dimensions };
+  return { graphics, dimensions }
 }
 
-/**
- * Calcula automaticamente a invasão/diferença geométrica (Ocupação fora do Lote Registrado)
- * e gera o polígono hachurado com as respectivas cotas em azul sobre as arestas.
- */
-export function calculatePublicAreaInvasion(
-  lotePolygons: Polygon[],
-  ocupacaoPolygons: Polygon[],
-  view?: MapView
-): {
-  differencePolygons: Polygon[];
-  polygonGraphics: Graphic[];
-  dimensionGraphics: Graphic[];
-  dimensions: SegmentDimension[];
-  totalInvasionAreaSqM: number;
-} {
-  const differencePolygons: Polygon[] = [];
-  const polygonGraphics: Graphic[] = [];
-  const dimensionGraphics: Graphic[] = [];
-  const dimensions: SegmentDimension[] = [];
-  let totalInvasionAreaSqM = 0;
-
-  if (!ocupacaoPolygons.length) {
-    return {
-      differencePolygons,
-      polygonGraphics,
-      dimensionGraphics,
-      dimensions,
-      totalInvasionAreaSqM,
-    };
+const getLargestIntersectingLot = async (
+  occupation: SelectedFeature,
+  lotLayer: FeatureLayer,
+  settings: AppMapSettings,
+  preferredLots: SelectedFeature[] = [],
+) => {
+  const occupationGeometry = ensurePolygon(occupation.graphic, 'A ocupação selecionada')
+  const preferredCandidates = preferredLots.filter(
+    (candidate) => candidate.kind === 'lote' && candidate.graphic.geometry,
+  )
+  if (preferredCandidates.length) {
+    const preferredMatch = preferredCandidates
+      .map((candidate) => ({
+        candidate,
+        area: geodesicArea(geometryEngine.intersect(occupationGeometry, candidate.graphic.geometry!)),
+      }))
+      .filter((item) => item.area > 0)
+      .sort((a, b) => b.area - a.area)[0]
+    if (preferredMatch) return preferredMatch.candidate
   }
 
-  const unionLotes =
-    lotePolygons.length > 0 ? (geometryEngine.union(lotePolygons) as Polygon) : null;
+  const query = lotLayer.createQuery()
+  query.geometry = occupationGeometry
+  query.spatialRelationship = 'intersects'
+  query.returnGeometry = true
+  query.outFields = ['*']
+  const response = await lotLayer.queryFeatures(query)
 
-  ocupacaoPolygons.forEach((ocupacao, idx) => {
-    const diffGeom = unionLotes
-      ? (geometryEngine.difference(ocupacao, unionLotes) as Polygon | null)
-      : ocupacao;
+  if (!response.features.length) throw new Error('Nenhum lote intersecta a ocupação selecionada.')
 
-    if (diffGeom && diffGeom.rings?.length) {
-      differencePolygons.push(diffGeom);
+  const candidates = response.features.filter((candidate) => Boolean(candidate.geometry))
+  if (!candidates.length) throw new Error('Os lotes encontrados não retornaram geometria para a análise.')
 
-      const sr = diffGeom.spatialReference;
-      const areaSqM =
-        sr?.isWGS84 || sr?.isWebMercator || sr?.wkid === 4326 || sr?.wkid === 4674 || sr?.wkid === 3857
-          ? Math.abs(geometryEngine.geodesicArea(diffGeom, "square-meters"))
-          : Math.abs(geometryEngine.planarArea(diffGeom, "square-meters"));
+  const bestMatch = candidates.reduce((currentBest, candidate) => {
+    const candidateIntersection = geometryEngine.intersect(occupationGeometry, candidate.geometry!)
+    const bestIntersection = geometryEngine.intersect(occupationGeometry, currentBest.geometry!)
+    return geodesicArea(candidateIntersection) > geodesicArea(bestIntersection) ? candidate : currentBest
+  })
 
-      totalInvasionAreaSqM += areaSqM;
+  return makeSelection('lote', bestMatch, lotLayer, settings)
+}
 
-      polygonGraphics.push(
-        createPolygonGraphic(diffGeom, "area_publica", {
-          featureId: `pub-${idx + 1}`,
-          areaSqM,
-        })
-      );
+export async function createAnalysisRuntime(
+  container: HTMLDivElement,
+  settings: AppMapSettings,
+  onSelection: (selection: SelectedFeature) => void,
+  getSelectionMode: () => FeatureKind,
+): Promise<AnalysisRuntime> {
+  const portal = new Portal({ url: settings.portalUrl.replace(/\/$/, '') })
+  const webmap = new WebMap({ portalItem: { id: settings.webMapId.trim(), portal } })
+  await webmap.loadAll()
 
-      const { graphics, dimensions: segDims } = createPolygonDimensionGraphics(
-        diffGeom,
-        {
-          featureId: `pub-${idx + 1}`,
-          featureLabel: `Área Pública · ${idx + 1}`,
-          category: "area_publica",
-          view,
-        }
-      );
+  const view = new MapView({
+    container,
+    map: webmap,
+    constraints: { snapToZoom: false },
+    popupEnabled: false,
+    ui: { components: ['zoom', 'compass', 'attribution'] },
+  })
+  await view.when()
 
-      dimensionGraphics.push(...graphics);
-      dimensions.push(...segDims);
+  const hatchLayer = new GraphicsLayer({ title: 'Análise temporária — área pública', listMode: 'hide' })
+  const dimensionLayer = new GraphicsLayer({ title: 'Análise temporária — cotas', listMode: 'hide' })
+  const selectionLayer = new GraphicsLayer({ title: 'Análise temporária — seleção', listMode: 'hide' })
+  const manualLayer = new GraphicsLayer({ title: 'Análise temporária — área pública desenhada', listMode: 'hide' })
+  webmap.addMany([hatchLayer, selectionLayer, manualLayer, dimensionLayer])
+
+  const sketch = new SketchViewModel({
+    view,
+    layer: manualLayer,
+    polygonSymbol: new SimpleFillSymbol({
+      style: 'cross',
+      color: [255, 226, 79, 0.9],
+      outline: new SimpleLineSymbol({ color: '#B93835', width: 3 }),
+    }),
+  })
+
+  const lotLayer = findFeatureLayer(webmap, settings.lotLayerTitle)
+  const occupationLayer = findFeatureLayer(webmap, settings.occupationLayerTitle)
+  if (!lotLayer || !occupationLayer) {
+    const available = webmap.allLayers
+      .map((layer) => layer.title)
+      .filter(Boolean)
+      .join(' | ')
+    throw new Error(
+      `Não encontrei uma das camadas configuradas. Camadas disponíveis: ${available || 'nenhuma'}.`,
+    )
+  }
+
+  lotLayer.visible = true
+  occupationLayer.visible = true
+  occupationLayer.opacity = 0.34
+  lotLayer.opacity = 0.82
+
+  const selectFeature = async (selected: SelectedFeature, zoomToFeature = false) => {
+    const selectionKey = `${selected.kind}:${
+      selected.graphic.attributes?.[
+        selected.kind === 'lote' ? lotLayer.objectIdField : occupationLayer.objectIdField
+      ] ?? selected.title
+    }`
+    selectionLayer.graphics
+      .toArray()
+      .filter((graphic) => graphic.attributes?.selectionKey === selectionKey)
+      .forEach((graphic) => selectionLayer.remove(graphic))
+    const geometry = selected.graphic.geometry
+    if (geometry?.type === 'polygon') {
+      const color = selected.kind === 'lote' ? [0, 224, 255, 0.16] : [255, 79, 126, 0.16]
+      const outline = selected.kind === 'lote' ? '#00DDF5' : '#FF4779'
+      selectionLayer.add(
+        new Graphic({
+          geometry,
+          symbol: new SimpleFillSymbol({
+            style: 'solid',
+            color,
+            outline: new SimpleLineSymbol({ color: outline, width: 4 }),
+          }),
+          attributes: { analysisType: 'selected-feature', selectedKind: selected.kind, selectionKey },
+        }),
+      )
     }
-  });
+    onSelection(selected)
+    if (zoomToFeature && geometry) await view.goTo(geometry, { duration: 550 })
+  }
+
+  const searchFeatures = async (kind: FeatureKind, searchText: string) => {
+    const value = searchText.trim().replace(/'/g, "''")
+    if (value.length < 2) return []
+    const layer = kind === 'lote' ? lotLayer : occupationLayer
+    const availableFields = new Set(layer.fields.map((field) => field.name.toLowerCase()))
+    const candidates =
+      kind === 'lote'
+        ? ['pu_ciu', 'end_car', 'pu_end_car', 'pu_end_usu']
+        : ['ct_ciu', 'end_car', 'lt_enderec', 'lt_nome']
+    const fields = candidates.filter((field) => availableFields.has(field.toLowerCase()))
+    const addressField = (
+      kind === 'lote'
+        ? ['end_car', 'pu_end_car', 'pu_end_usu']
+        : ['end_car', 'lt_enderec', 'lt_nome']
+    ).find((field) => availableFields.has(field.toLowerCase()))
+    if (!fields.length) {
+      throw new Error(`A camada ${layer.title} não possui campos de CIU ou endereço configurados.`)
+    }
+    const query = layer.createQuery()
+    query.where = fields.map((field) => `UPPER(${field}) LIKE UPPER('%${value}%')`).join(' OR ')
+    query.outFields = ['*']
+    query.returnGeometry = true
+    query.num = 8
+    const response = await layer.queryFeatures(query)
+    return response.features.map((graphic) => makeSelection(kind, graphic, layer, settings, addressField))
+  }
+
+  const clickHandle = view.on('click', async (event) => {
+    const kind = getSelectionMode()
+    const targetLayer = kind === 'lote' ? lotLayer : occupationLayer
+    const query = targetLayer.createQuery()
+    query.geometry = event.mapPoint
+    query.spatialRelationship = 'intersects'
+    query.returnGeometry = true
+    query.outFields = ['*']
+    query.num = 1
+    const response = await targetLayer.queryFeatures(query)
+    const graphic = response.features[0]
+    if (!graphic) return
+
+    await selectFeature(makeSelection(kind, graphic, targetLayer, settings))
+  })
 
   return {
-    differencePolygons,
-    polygonGraphics,
-    dimensionGraphics,
-    dimensions,
-    totalInvasionAreaSqM,
-  };
-}
+    view,
+    layerTitles: webmap.allLayers
+      .toArray()
+      .map((layer) => layer.title || '')
+      .filter(Boolean),
+    setSelectionMode: () => {
+      lotLayer.visible = true
+      occupationLayer.visible = true
+    },
+    searchFeatures,
+    selectFeature,
+    drawDimensions: (features) => {
+      const allDimensions: DimensionItem[] = []
+      const groups = new Set(features.map((feature) => `segments:${feature.kind}`))
+      dimensionLayer.graphics
+        .toArray()
+        .filter((graphic) => groups.has(String(graphic.attributes?.dimensionGroup || '')))
+        .forEach((graphic) => dimensionLayer.remove(graphic))
+      features.forEach((feature, featureIndex) => {
+        const label = feature.kind === 'lote' ? `O lote ${featureIndex + 1}` : `A ocupação ${featureIndex + 1}`
+        const polygon = ensurePolygon(feature.graphic, label)
+        const dimensionGroup = `segments:${feature.kind}`
+        const { graphics, dimensions } = buildDimensionGraphics(
+          polygon,
+          view.rotation,
+          feature.title,
+          feature.kind,
+          dimensionGroup,
+        )
+        dimensionLayer.addMany(graphics)
+        allDimensions.push(...dimensions)
+      })
+      return allDimensions
+    },
+    analysePublicArea: async (occupation, preferredLots = []) => {
+      const lot = await getLargestIntersectingLot(occupation, lotLayer, settings, preferredLots)
+      const occupationPolygon = ensurePolygon(occupation.graphic, 'A ocupação selecionada')
+      const lotPolygon = ensurePolygon(lot.graphic, 'O lote associado')
+      const reportedOccupationArea = reportedOrGeometricArea(occupation.graphic, settings.occupationAreaField)
+      const reportedLotArea = reportedOrGeometricArea(lot.graphic, settings.lotAreaField)
+      const numericalExcess = Math.max(reportedOccupationArea - reportedLotArea, 0)
+      const difference = geometryEngine.difference(occupationPolygon, lotPolygon)
+      const hachGeometry = firstGeometry(difference)
+      const geometricPublicArea = geodesicArea(difference)
+      const hasAttributeExcess = numericalExcess > 0.5
+      const hasGeometricDifference = geometricPublicArea > 0.5
+      const hasPublicArea = hasAttributeExcess || hasGeometricDifference
+      const dimensions: DimensionItem[] = []
 
-/**
- * Desenha os polígonos (incluindo hachurados) e as cotas em azul sobre as arestas
- * diretamente no Canvas de exportação (PDF, PNG, JPG).
- */
-export function renderAnalysisOverlayOnCanvas(
-  ctx: CanvasRenderingContext2D,
-  view: MapView,
-  options: {
-    dimensions: SegmentDimension[];
-    polygons?: Array<{ polygon: Polygon; category: FeatureCategory }>;
-  }
-): void {
-  const dpr = window.devicePixelRatio || 1;
-
-  // 1. Opcional: garante que polígonos e hachuras fiquem nítidos na captura
-  if (options.polygons?.length) {
-    for (const item of options.polygons) {
-      const styleCfg = POLYGON_STYLES[item.category];
-      for (const ring of item.polygon.rings) {
-        if (ring.length < 2) continue;
-
-        ctx.save();
-        ctx.beginPath();
-        ring.forEach((coord, idx) => {
-          const pt = new Point({
-            x: coord[0],
-            y: coord[1],
-            spatialReference: item.polygon.spatialReference,
-          });
-          const screenPt = view.toScreen(pt);
-          if (!screenPt) return;
-          if (idx === 0) ctx.moveTo(screenPt.x * dpr, screenPt.y * dpr);
-          else ctx.lineTo(screenPt.x * dpr, screenPt.y * dpr);
-        });
-        ctx.closePath();
-
-        ctx.strokeStyle = `rgba(${styleCfg.outlineColor[0]}, ${styleCfg.outlineColor[1]}, ${styleCfg.outlineColor[2]}, ${styleCfg.outlineColor[3]})`;
-        ctx.lineWidth = styleCfg.outlineWidth * dpr;
-        ctx.stroke();
-        ctx.restore();
+      if (hasPublicArea && hachGeometry) {
+        hatchLayer.addMany([
+          new Graphic({
+            geometry: hachGeometry,
+            symbol: new SimpleFillSymbol({
+              style: 'none',
+              outline: new SimpleLineSymbol({ color: '#1C2525', width: 4.2 }),
+            }),
+            attributes: {
+              analysisType: 'public-area-outline',
+              reportedExcess: numericalExcess,
+              geometricArea: geometricPublicArea,
+            },
+          }),
+          new Graphic({
+            geometry: hachGeometry,
+            symbol: new SimpleFillSymbol({
+              style: 'cross',
+              color: [255, 226, 79, 0.92],
+              outline: new SimpleLineSymbol({ color: '#FFE46E', width: 2.1 }),
+            }),
+            attributes: {
+              analysisType: 'public-area',
+              reportedExcess: numericalExcess,
+              geometricArea: geometricPublicArea,
+            },
+          }),
+          new Graphic({
+            geometry: (hachGeometry as Polygon).centroid || (occupationPolygon as Polygon).centroid,
+            symbol: new TextSymbol({
+              text: `${occupation.title} · ${geometricPublicArea.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m²`,
+              color: '#8A211F',
+              haloColor: '#FFFDF6',
+              haloSize: 2.5,
+              font: { family: 'Source Sans 3', size: 10, weight: 'bold' },
+            }),
+            attributes: { analysisType: 'public-area-label', geometricArea: geometricPublicArea },
+          }),
+        ])
+        if (hachGeometry.type === 'polygon') {
+          const { graphics, dimensions: polygonDimensions } = buildDimensionGraphics(
+            hachGeometry as Polygon,
+            view.rotation,
+            occupation.title,
+            'area-publica',
+            'public-area',
+          )
+          dimensionLayer.addMany(graphics)
+          dimensions.push(...polygonDimensions)
+        }
       }
-    }
+
+      return {
+        lot,
+        occupation,
+        reportedLotArea,
+        reportedOccupationArea,
+        numericalExcess,
+        geometricPublicArea,
+        hasPublicArea,
+        dimensions,
+        note: hasPublicArea
+          ? hasGeometricDifference
+            ? `A hachura automática representa ${geometricPublicArea.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m² fora do lote. Excedente da tabela: ${numericalExcess.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m².`
+            : `A tabela de atributos indica excedente de ${numericalExcess.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} m², mas não foi encontrada diferença geométrica para hachurar.`
+          : 'Não foi identificada diferença geométrica nem excedente nas áreas da tabela de atributos.',
+      }
+    },
+    drawManualPublicArea: () =>
+      new Promise((resolve, reject) => {
+        const handle = sketch.on('create', (event) => {
+          if (event.state !== 'complete') return
+          handle.remove()
+          const geometry = event.graphic.geometry
+          const area = geodesicArea(geometry)
+          if (!geometry || geometry.type !== 'polygon' || area <= 0) {
+            reject(new Error('Desenhe um polígono válido para representar a área pública.'))
+            return
+          }
+          const { graphics } = buildDimensionGraphics(
+            geometry as Polygon,
+            view.rotation,
+            'Área pública manual',
+            'area-publica',
+            'manual-public-area',
+          )
+          dimensionLayer.addMany(graphics)
+          resolve({ area, geometry })
+        })
+        sketch.create('polygon')
+      }),
+    clearGraphics: () => {
+      hatchLayer.removeAll()
+      dimensionLayer.removeAll()
+      manualLayer.removeAll()
+    },
+    clearPublicAreaGraphics: () => {
+      hatchLayer.removeAll()
+      dimensionLayer.graphics
+        .toArray()
+        .filter(
+          (graphic) =>
+            graphic.attributes?.dimensionGroup === 'public-area' ||
+            graphic.attributes?.dimensionGroup === 'manual-public-area',
+        )
+        .forEach((graphic) => dimensionLayer.remove(graphic))
+    },
+    exportMapImage: async (format) => {
+      const screenshot = await view.takeScreenshot({ format })
+      const extent = view.extent
+      if (!screenshot.dataUrl || !extent) {
+        throw new Error(`Não foi possível gerar a imagem ${format.toUpperCase()} do mapa.`)
+      }
+      const spatialReference = view.spatialReference as __esri.SpatialReference & {
+        latestWkid?: number | null
+      }
+      const geographicExtent = webMercatorUtils.webMercatorToGeographic(extent) as __esri.Extent
+      return {
+        dataUrl: screenshot.dataUrl,
+        extent: { xmin: extent.xmin, ymin: extent.ymin, xmax: extent.xmax, ymax: extent.ymax },
+        geographicExtent: {
+          xmin: geographicExtent.xmin,
+          ymin: geographicExtent.ymin,
+          xmax: geographicExtent.xmax,
+          ymax: geographicExtent.ymax,
+        },
+        spatialReference: {
+          wkid: spatialReference?.wkid ?? undefined,
+          latestWkid: spatialReference?.latestWkid ?? undefined,
+          wkt: spatialReference?.wkt ?? undefined,
+        },
+        scale: view.scale ?? 0,
+        zoom: view.zoom ?? 0,
+      }
+    },
+    printAnalysis: async (printSettings, title, analysisText, selectionText) => {
+      const layout = printSettings.layoutName.trim() || 'MAP_ONLY'
+      const template = new PrintTemplate({
+        format: 'pdf',
+        layout: layout as any,
+        layoutOptions: {
+          titleText: title,
+          customTextElements: [{ analysis_info: analysisText }, { popup_info: selectionText }],
+        },
+        exportOptions: { dpi: 180 },
+      })
+      const parameters = new PrintParameters({ view, template })
+      const executionMode = await print.getMode(printSettings.printServiceUrl)
+      const hiddenForPrint = webmap.allLayers
+        .toArray()
+        .filter((layer) => /regi(?:ão|ões)\s+administrativ|\bRA\b/i.test(layer.title || ''))
+        .map((layer) => ({ layer, visible: layer.visible }))
+      hiddenForPrint.forEach(({ layer }) => {
+        layer.visible = false
+      })
+      try {
+        const response = await print.execute(printSettings.printServiceUrl, parameters)
+        if (!response.url) {
+          throw new Error(
+            `O serviço de impressão não retornou a URL do PDF. Modo: ${executionMode}; layout enviado: ${layout}.`,
+          )
+        }
+        return response.url
+      } finally {
+        hiddenForPrint.forEach(({ layer, visible }) => {
+          layer.visible = visible
+        })
+      }
+    },
+    destroy: () => {
+      clickHandle.remove()
+      sketch.destroy()
+      view.destroy()
+    },
   }
-
-  // 2. Desenha todas as cotas em azul exatamente sobre as arestas e alinhadas com cada lado
-  for (const dim of options.dimensions) {
-    const s1 = view.toScreen(dim.p1);
-    const s2 = view.toScreen(dim.p2);
-    if (!s1 || !s2) continue;
-
-    const x1 = s1.x * dpr;
-    const y1 = s1.y * dpr;
-    const x2 = s2.x * dpr;
-    const y2 = s2.y * dpr;
-
-    const midX = (x1 + x2) / 2;
-    const midY = (y1 + y2) / 2;
-
-    // Em coordenadas de ecrã (s1, s2), o eixo Y já cresce para baixo:
-    let angleRad = Math.atan2(y2 - y1, x2 - x1);
-    if (angleRad > Math.PI / 2) angleRad -= Math.PI;
-    if (angleRad < -Math.PI / 2) angleRad += Math.PI;
-
-    ctx.save();
-    ctx.translate(midX, midY);
-    ctx.rotate(angleRad);
-
-    ctx.font = `bold ${Math.round(12 * dpr)}px Arial, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    // Halo branco para destacar sobre o contorno da aresta
-    ctx.lineWidth = 4 * dpr;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.96)";
-    ctx.lineJoin = "round";
-    ctx.strokeText(dim.formattedLength, 0, 0);
-
-    // Fonte azul idêntica à referência
-    ctx.fillStyle = "#0070FF";
-    ctx.fillText(dim.formattedLength, 0, 0);
-
-    ctx.restore();
-  }
-}
-
-/**
- * Captura o MapView com todas as cotas azuis sobrepostas para download em PNG ou JPG
- */
-export async function exportMapImageWithDimensions(
-  view: MapView,
-  dimensions: SegmentDimension[],
-  format: "png" | "jpg" = "png",
-  polygons?: Array<{ polygon: Polygon; category: FeatureCategory }>
-): Promise<string> {
-  const screenshot = await view.takeScreenshot({ format: "png" });
-
-  const canvas = document.createElement("canvas");
-  canvas.width = screenshot.data.width;
-  canvas.height = screenshot.data.height;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    return screenshot.dataUrl;
-  }
-
-  ctx.putImageData(screenshot.data, 0, 0);
-
-  // Desenha as cotas azuis alinhadas sobre as arestas na imagem exportada
-  renderAnalysisOverlayOnCanvas(ctx, view, { dimensions, polygons });
-
-  const mimeType = format === "jpg" ? "image/jpeg" : "image/png";
-  return canvas.toDataURL(mimeType, 0.95);
-}
-
-/**
- * Limpa os gráficos temporários de cotas e análises da camada
- */
-export function clearTemporaryAnalysisGraphics(layer: GraphicsLayer): void {
-  if (!layer) return;
-  layer.removeAll();
 }
